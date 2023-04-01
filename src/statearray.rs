@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::ops::{Index, IndexMut};
+use std::ops::{Index, IndexMut, SubAssign};
 
 const MOD: u64 = 1000000007;
 const BASE: u64 = 211;
@@ -32,6 +32,10 @@ impl<T: Copy + Default> StateArray<T> {
             data: HashMap::new(),
         }
     }
+
+    pub fn contains_state(&self, index: &CardCount) -> bool {
+        self.data.contains_key(&index.hash_value)
+    }
 }
 
 impl<T: Copy + Default> Index<&CardCount> for StateArray<T> {
@@ -53,20 +57,24 @@ impl<T: Copy + Default> IndexMut<&CardCount> for StateArray<T> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct CardCount {
-    counts: [u8; 10],
+    counts: [u16; 10],
     hash_value: u64,
+    sum: u16,
+    total: u16,
 }
 
 /// This provides a container to store the numbers of each card value (from
 /// 1 to 10 inclusive).
 impl CardCount {
-    pub fn new(counts: &[u8; 10]) -> CardCount {
+    pub fn new(counts: &[u16; 10]) -> CardCount {
         let mut card_count = CardCount {
             counts: *counts,
             hash_value: 0,
+            sum: 0,
+            total: 0,
         };
 
-        card_count.propagate_hash();
+        card_count.propagate_counts();
 
         card_count
     }
@@ -78,6 +86,8 @@ impl CardCount {
         let index = (card_value - 1) as usize;
         self.counts[index] += 1;
         self.hash_value = (self.hash_value + POW_BASE[index]) % MOD;
+        self.sum += card_value as u16;
+        self.total += 1;
     }
 
     /// Remove a card of given card value.
@@ -88,19 +98,47 @@ impl CardCount {
         let index = (card_value - 1) as usize;
         self.counts[index] -= 1;
         self.hash_value = (self.hash_value + MOD - POW_BASE[index]) % MOD;
+        self.sum -= card_value as u16;
+        self.total -= 1;
     }
 
-    fn propagate_hash(&mut self) {
+    /// Note that this method treats Ace as 1.
+    pub fn get_sum(&self) -> u16 {
+        self.sum
+    }
+
+    pub fn get_total(&self) -> u16 {
+        self.total
+    }
+
+    pub fn is_soft(&self) -> bool {
+        self.counts[0] > 0
+    }
+
+    fn propagate_counts(&mut self) {
         self.hash_value = 0;
+        self.sum = 0;
         for i in 0..self.counts.len() {
             self.hash_value += (self.counts[i] as u64) * POW_BASE[i];
+            self.sum += ((i + 1) as u16) * self.counts[i];
+            self.total += self.counts[i] as u16;
         }
         self.hash_value %= MOD;
     }
 }
 
+impl SubAssign<&CardCount> for CardCount {
+    fn sub_assign(&mut self, rhs: &CardCount) {
+        for i in 0..self.counts.len() {
+            self.counts[i] -= rhs.counts[i];
+        }
+
+        self.propagate_counts();
+    }
+}
+
 impl Index<u8> for CardCount {
-    type Output = u8;
+    type Output = u16;
     fn index(&self, index: u8) -> &Self::Output {
         &self.counts[(index - 1) as usize]
     }
@@ -117,18 +155,18 @@ mod tests {
     use super::*;
     use rand::Rng;
 
-    fn generate_random_counts(number_of_decks: u8) -> [u8; 10] {
+    fn generate_random_counts(number_of_decks: u8) -> [u16; 10] {
         let mut rng = rand::thread_rng();
-        let mut counts: [u8; 10] = [0; 10];
+        let mut counts: [u16; 10] = [0; 10];
         for i in 0..9 {
-            counts[i] = rng.gen_range(0..=number_of_decks * 4);
+            counts[i] = rng.gen_range(0..=(number_of_decks as u16) * 4);
         }
-        counts[9] = rng.gen_range(0..=number_of_decks * 16);
+        counts[9] = rng.gen_range(0..=(number_of_decks as u16) * 16);
 
         counts
     }
 
-    fn horner_method(counts: &[u8; 10]) -> u64 {
+    fn horner_method(counts: &[u16; 10]) -> u64 {
         let mut ret: u64 = 0;
         for i in (0..10).rev() {
             ret = (ret * BASE + (counts[i] as u64)) % MOD;
@@ -156,8 +194,8 @@ mod tests {
             let mut card_count = CardCount::new(&counts);
             let card_value: u8 = rand::thread_rng().gen_range(1..=10);
 
-            if card_count[card_value] < number_of_decks * 4
-                || card_value == 10 && card_count[card_value] < number_of_decks * 16
+            if card_count[card_value] < (number_of_decks as u16) * 4
+                || card_value == 10 && card_count[card_value] < (number_of_decks as u16) * 16
             {
                 counts[(card_value - 1) as usize] += 1;
                 card_count.add_card(card_value);
@@ -172,7 +210,7 @@ mod tests {
         for _turn in 0..10 {
             let mut raw_counts = generate_random_counts(8);
             raw_counts[3] = 2;
-            let raw_counts: [u8; 10] = raw_counts;
+            let raw_counts: [u16; 10] = raw_counts;
 
             let mut sa: StateArray<i32> = StateArray::new();
             let mut cc1 = CardCount::new(&raw_counts);
