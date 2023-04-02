@@ -40,7 +40,10 @@ pub struct MaxExpectation {
 }
 
 impl MaxExpectation {
-    fn get_max_expectation(&self) -> (f64, Decision) {
+    pub fn get_max_expectation(&self, bust: bool) -> (f64, Decision) {
+        if bust {
+            return (-1.0, Decision::Stand);
+        }
         let mut max_ex = -0.5;
         let mut decision = Decision::Surrender;
         if max_ex < self.hit {
@@ -174,7 +177,7 @@ fn memoization_find_solution(
 
         memoization_find_solution(rule, dealer_up_card, current_shoe, current_hand, solution);
 
-        let (ex_max, _): (f64, _) = solution[current_hand].get_max_expectation();
+        let (ex_max, _): (f64, _) = solution[current_hand].get_max_expectation(current_hand.bust());
         let ex_stand: f64 = solution[current_hand].stand;
 
         current_hand.remove_card(i);
@@ -222,13 +225,21 @@ fn calculate_stand_odds(
     shoe: &CardCount,
 ) -> WinLoseCasesOdds {
     let mut dealer_extra_hand = CardCount::new(&[0; 10]);
-    let player_sum = {
-        if player_hand.is_soft() && player_hand.get_sum() + 10 <= 21 {
-            player_hand.get_sum() + 10
-        } else {
-            player_hand.get_sum()
-        }
-    };
+    let player_sum = player_hand.get_actual_sum();
+
+    // Special case: Player hand is natural Blackjack
+    if player_hand.is_natural() {
+        let p_dealer_also_natural = match *dealer_up_card {
+            1 => shoe.get_proportion(10),
+            10 => shoe.get_proportion(1),
+            _ => 0.0,
+        };
+        return WinLoseCasesOdds {
+            win: 1.0 - p_dealer_also_natural,
+            push: p_dealer_also_natural,
+            lose: 0.0,
+        };
+    }
 
     let mut odds = StateArray::new();
 
@@ -244,6 +255,9 @@ fn calculate_stand_odds(
     odds[&dealer_extra_hand]
 }
 
+/// Note that the callers of this function must ensure that if player_sum is 21, it must NOT be
+/// a natural Blackjack. Player natural Blackjack should be handled separately as a special
+/// case before recursively calling this function.
 fn memoization_find_win_lose_cases_count(
     // Input parameters
     rule: &Rule,
@@ -275,14 +289,21 @@ fn memoization_find_win_lose_cases_count(
         add_to_win_lose_cases_count(*player_sum, dealer_sum, &mut odds[dealer_extra_hand], p);
         return;
     }
-    if is_soft && rule.dealer_hit_on_soft17 && dealer_sum + 10 > 17 && dealer_sum + 10 <= 21 {
-        add_to_win_lose_cases_count(
-            *player_sum,
-            dealer_sum + 10,
-            &mut odds[dealer_extra_hand],
-            p,
-        );
-        return;
+    // if is_soft && rule.dealer_hit_on_soft17 && dealer_sum + 10 > 17 && dealer_sum + 10 <= 21 {
+    if is_soft {
+        // Dealer gets natural Blackjack!! OMG!
+        if dealer_sum + 10 == 21 && dealer_extra_hand.get_total() == 1 {
+            odds[dealer_extra_hand].lose += p;
+            return;
+        } else if rule.dealer_hit_on_soft17 && dealer_sum + 10 > 17 && dealer_sum + 10 <= 21 {
+            add_to_win_lose_cases_count(
+                *player_sum,
+                dealer_sum + 10,
+                &mut odds[dealer_extra_hand],
+                p,
+            );
+            return;
+        }
     }
 
     // Case 2: Dealer must hit.
@@ -345,13 +366,13 @@ mod tests {
     #[test]
     fn test_find_win_lose_cases_count() {
         let rule = get_typical_rule();
-        let original_shoe = CardCount::new(&[20, 20, 19, 19, 20, 20, 20, 20, 20, 127]);
+        let original_shoe = CardCount::new(&[0, 0, 0, 0, 0, 0, 0, 0, 10, 10]);
         let mut dealer_extra_hand = CardCount::new(&[0; 10]);
         let mut odds = StateArray::new();
         memoization_find_win_lose_cases_count(
             &rule,
             &21,
-            &3,
+            &1,
             &original_shoe,
             &mut dealer_extra_hand,
             &mut odds,
@@ -369,8 +390,8 @@ mod tests {
         let mut counts = [4 * (rule.number_of_decks as u16); 10];
         counts[9] = 16 * (rule.number_of_decks as u16);
         let mut shoe = CardCount::new(&counts);
-        let hand_cards = (5, 10);
-        let dealer_up_card = 5;
+        let hand_cards = (7, 2);
+        let dealer_up_card = 7;
         shoe.remove_card(hand_cards.0);
         shoe.remove_card(hand_cards.1);
         shoe.remove_card(dealer_up_card);

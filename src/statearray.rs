@@ -115,6 +115,26 @@ impl CardCount {
         self.counts[0] > 0
     }
 
+    pub fn bust(&self) -> bool {
+        self.sum > 21
+    }
+
+    pub fn is_natural(&self) -> bool {
+        self.total == 2 && self.counts[0] == 1 && self.counts[9] == 1
+    }
+
+    pub fn get_actual_sum(&self) -> u16 {
+        if self.is_soft() && self.sum + 10 <= 21 {
+            self.sum + 10
+        } else {
+            self.sum
+        }
+    }
+
+    pub fn get_proportion(&self, card_value: u8) -> f64 {
+        (self[card_value] as f64) / (self.total as f64)
+    }
+
     fn propagate_counts(&mut self) {
         self.hash_value = 0;
         self.sum = 0;
