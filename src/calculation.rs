@@ -128,11 +128,29 @@ fn memoization_find_solution(
         };
         return;
     }
-    // Obvious case 2: Current hand sum is 21. Stand!
-    if current_sum == 21 || current_hand.is_soft() && current_sum == 11 {
+
+    let stand_odds = calculate_stand_odds(rule, current_hand, dealer_up_card, current_shoe);
+    // Obvious case 2: Current hard hand sum is 21. Stand!
+    if current_sum == 21 {
         // Stand (obvious)
         solution[current_hand] = MaxExpectation {
-            stand: calculate_stand_expectation(rule, current_hand, dealer_up_card, current_shoe),
+            stand: stand_odds.win - stand_odds.lose,
+            ..Default::default()
+        };
+        return;
+    }
+    // Obvious case 3: Current soft hand sum is 21. Stand!
+    if current_hand.is_soft() && current_sum == 11 {
+        let stand = {
+            if current_hand.get_total() == 2 {
+                // Blackjack! Congrats!
+                stand_odds.win * rule.payout_blackjack - stand_odds.lose
+            } else {
+                stand_odds.win - stand_odds.lose
+            }
+        };
+        solution[current_hand] = MaxExpectation {
+            stand,
             ..Default::default()
         };
         return;
@@ -167,8 +185,8 @@ fn memoization_find_solution(
         solution[current_hand].double += p * 2.0 * ex_stand;
     }
 
-    solution[current_hand].stand =
-        calculate_stand_expectation(rule, current_hand, dealer_up_card, current_shoe);
+    let stand_odds = calculate_stand_odds(rule, current_hand, dealer_up_card, current_shoe);
+    solution[current_hand].stand = stand_odds.win - stand_odds.lose;
 }
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -197,12 +215,12 @@ impl ops::Mul<f64> for WinLoseCasesOdds {
     }
 }
 
-fn calculate_stand_expectation(
+fn calculate_stand_odds(
     rule: &Rule,
     player_hand: &CardCount,
     dealer_up_card: &u8,
     shoe: &CardCount,
-) -> f64 {
+) -> WinLoseCasesOdds {
     let mut dealer_extra_hand = CardCount::new(&[0; 10]);
     let player_sum = {
         if player_hand.is_soft() && player_hand.get_sum() + 10 <= 21 {
@@ -223,7 +241,7 @@ fn calculate_stand_expectation(
         &mut odds,
     );
 
-    odds[&dealer_extra_hand].win - odds[&dealer_extra_hand].lose
+    odds[&dealer_extra_hand]
 }
 
 fn memoization_find_win_lose_cases_count(
@@ -332,7 +350,7 @@ mod tests {
         let mut odds = StateArray::new();
         memoization_find_win_lose_cases_count(
             &rule,
-            &14,
+            &21,
             &3,
             &original_shoe,
             &mut dealer_extra_hand,
@@ -351,8 +369,8 @@ mod tests {
         let mut counts = [4 * (rule.number_of_decks as u16); 10];
         counts[9] = 16 * (rule.number_of_decks as u16);
         let mut shoe = CardCount::new(&counts);
-        let hand_cards = (2, 8);
-        let dealer_up_card = 8;
+        let hand_cards = (5, 10);
+        let dealer_up_card = 5;
         shoe.remove_card(hand_cards.0);
         shoe.remove_card(hand_cards.1);
         shoe.remove_card(dealer_up_card);
