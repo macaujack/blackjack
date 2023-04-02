@@ -1,4 +1,5 @@
 pub mod calculation;
+pub mod simulation;
 mod statearray;
 
 pub use statearray::CardCount;
