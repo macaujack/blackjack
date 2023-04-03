@@ -5,25 +5,34 @@ mod statearray;
 pub use statearray::CardCount;
 pub use statearray::StateArray;
 
+#[derive(Clone, Copy)]
 pub struct Rule {
     pub number_of_decks: u8,
-    pub cut_card_proportion: f64, // The proportion of cards before the cut card.
-    pub split_all_limits: u8,     // Only supports 0 or 1 now.
-    pub split_ace_limits: u8,     // Only supports 0 or 1 now.
+    pub cut_card_proportion: f64, // The proportion of cards before the cut card. // TODO: Use this.
+    pub split_all_limits: u8,     // Only supports 0 or 1 now. // TODO: Use this.
+    pub split_ace_limits: u8,     // Only supports 0 or 1 now. // TODO: Use this.
     pub double_policy: DoublePolicy,
     pub dealer_hit_on_soft17: bool,
-    pub allow_das: bool,
+    pub allow_das: bool, // TODO: Use this.
     pub allow_late_surrender: bool,
-    pub dealer_peek_hole_card: bool,
+    pub peek_policy: PeekPolicy,
 
     pub payout_blackjack: f64,
-    pub payout_insurance: f64,
+    pub payout_insurance: f64, // TODO: Use this.
 }
 
+#[derive(Clone, Copy)]
 pub enum DoublePolicy {
     AnyTwo,
     NineTenElevenOnly,
     TenElevenOnly,
+}
+
+#[derive(Clone, Copy)]
+pub enum PeekPolicy {
+    UpAceOrTen,
+    UpAce,
+    NoPeek,
 }
 
 #[derive(Clone, Copy, Debug)]

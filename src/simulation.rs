@@ -172,19 +172,21 @@ mod tests {
 
     struct MyStrategy {
         sol: SolutionForInitialSituation,
+        rule: Rule,
     }
 
     impl Strategy for MyStrategy {
         fn init(&mut self, rule: &Rule, initial_situation: &InitialSituation) {
             self.sol = calculate_solution(rule, initial_situation);
+            self.rule = *rule;
         }
         fn make_decision(&self, current_hand: &CardCount) -> Decision {
             if current_hand.get_total() == 2 && current_hand[1] == 2 {
                 return Decision::Split;
             }
 
-            let (_, decision) =
-                self.sol.general_solution[current_hand].get_max_expectation(current_hand.bust());
+            let (_, decision) = self.sol.general_solution[current_hand]
+                .get_max_expectation(current_hand.bust(), self.rule.allow_late_surrender);
             decision
         }
     }
@@ -317,7 +319,7 @@ mod tests {
             dealer_hit_on_soft17: true,
             allow_das: true,
             allow_late_surrender: true,
-            dealer_peek_hole_card: true,
+            peek_policy: crate::PeekPolicy::UpAceOrTen,
 
             payout_blackjack: 1.5,
             payout_insurance: 0.0,
@@ -329,14 +331,15 @@ mod tests {
         println!("Test begin!!!");
         let firsts = vec![1, 5, 2];
         let mut shoe = Shoe::new(8, 0.5, &firsts);
+        let rule = get_typical_rule();
         let mut basic_strategy: BasicStrategy = Default::default();
         let mut my_strategy: MyStrategy = MyStrategy {
+            rule: rule,
             sol: SolutionForInitialSituation {
                 general_solution: StateArray::new(),
                 split_expectation: 0.0,
             },
         };
-        let rule = get_typical_rule();
 
         let mut acc_basic: i32 = 0;
         let mut acc_my: i32 = 0;

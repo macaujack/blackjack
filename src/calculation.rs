@@ -1,4 +1,4 @@
-use super::{Decision, Rule};
+use super::{Decision, PeekPolicy, Rule};
 use crate::{CardCount, InitialSituation, StateArray};
 use std::{cmp::Ordering, ops};
 
@@ -10,12 +10,19 @@ pub struct MaxExpectation {
 }
 
 impl MaxExpectation {
-    pub fn get_max_expectation(&self, bust: bool) -> (f64, Decision) {
+    pub fn get_max_expectation(&self, bust: bool, allow_late_surrender: bool) -> (f64, Decision) {
         if bust {
             return (-1.0, Decision::Stand);
         }
-        let mut max_ex = -0.5;
-        let mut decision = Decision::Surrender;
+        let mut max_ex;
+        let mut decision;
+        if allow_late_surrender {
+            max_ex = -0.5;
+            decision = Decision::Surrender;
+        } else {
+            max_ex = -f64::INFINITY;
+            decision = Decision::PlaceHolder;
+        }
         if max_ex < self.hit {
             max_ex = self.hit;
             decision = Decision::Hit;
@@ -146,7 +153,8 @@ fn memoization_find_solution(
 
         memoization_find_solution(rule, dealer_up_card, current_shoe, current_hand, solution);
 
-        let (ex_max, _): (f64, _) = solution[current_hand].get_max_expectation(current_hand.bust());
+        let (ex_max, _): (f64, _) = solution[current_hand]
+            .get_max_expectation(current_hand.bust(), rule.allow_late_surrender);
         let ex_stand: f64 = solution[current_hand].stand;
 
         current_hand.remove_card(i);
@@ -198,12 +206,22 @@ fn calculate_stand_odds(
 
     // Special case: Player hand is natural Blackjack
     if player_hand.is_natural() {
-        // Here we don't need to take dealer natural Blackjack into consideration, because if she
-        // does get Blackjack, the game should have finished already. That is, this is a problem
-        // of conditional probability.
+        let p_dealer_also_natural = match rule.peek_policy {
+            PeekPolicy::UpAceOrTen => 0.0,
+            PeekPolicy::UpAce => match *dealer_up_card {
+                10 => shoe.get_proportion(1),
+                _ => 0.0,
+            },
+            PeekPolicy::NoPeek => match *dealer_up_card {
+                1 => shoe.get_proportion(10),
+                10 => shoe.get_proportion(1),
+                _ => 0.0,
+            },
+        };
         return WinLoseCasesOdds {
-            win: 1.0,
-            ..Default::default()
+            win: 1.0 - p_dealer_also_natural,
+            push: p_dealer_also_natural,
+            lose: 0.0,
         };
     }
 
@@ -254,12 +272,16 @@ fn memoization_find_win_lose_cases_count(
         return;
     }
     if is_soft {
-        // Dealer gets natural Blackjack, which is an invalid situation, because if dealer does get
-        // natural Blackjac, the game finishes at the very beginning.
-        // Note that the propability p is not added to odds. This makes the final result not equal
-        // to 1.0.
+        // Dealer gets natural Blackjack!! OMG!!
+        // Note that if the peek policy is UpAceOrTen, dealer will peek the hole card when the up card is Ace or 10,
+        // which immediately ends the game if she gets a natural Blackjack. This in turn makes the following 'if'
+        // impossible to run.
         if dealer_sum + 10 == 21 && dealer_extra_hand.get_total() == 1 {
-            panic!("Invalid state reached");
+            odds[dealer_extra_hand] = WinLoseCasesOdds {
+                lose: 1.0,
+                ..Default::default()
+            };
+            return;
         } else if rule.dealer_hit_on_soft17 && dealer_sum + 10 > 17 && dealer_sum + 10 <= 21 {
             add_to_win_lose_cases_count(
                 *player_sum,
@@ -271,23 +293,39 @@ fn memoization_find_win_lose_cases_count(
         }
     }
 
-    let dealer_potential_natural =
-        dealer_extra_hand.get_total() == 0 && (*dealer_up_card == 1 || *dealer_up_card == 10);
-
-    let current_valid_shoe_total = {
-        if dealer_potential_natural {
-            original_shoe.get_total() - original_shoe[11 - dealer_up_card]
+    let (next_card_min, next_card_max, current_valid_shoe_total) = {
+        if dealer_extra_hand.get_total() != 0 {
+            (
+                1,
+                10,
+                original_shoe.get_total() - dealer_extra_hand.get_total(),
+            )
         } else {
-            original_shoe.get_total() - dealer_extra_hand.get_total()
+            // Yes this is an ugly piece of code. If Rust supports 'fallthrough' in the pattern matching,
+            // the code can be much cleaner.
+            match rule.peek_policy {
+                PeekPolicy::UpAceOrTen => match *dealer_up_card {
+                    1 => (1, 9, original_shoe.get_total() - original_shoe[10]),
+                    10 => (2, 10, original_shoe.get_total() - original_shoe[1]),
+                    _ => (1, 10, original_shoe.get_total()),
+                },
+                PeekPolicy::UpAce => match *dealer_up_card {
+                    1 => (1, 9, original_shoe.get_total() - original_shoe[10]),
+                    _ => (1, 10, original_shoe.get_total()),
+                },
+                PeekPolicy::NoPeek => (
+                    1,
+                    10,
+                    original_shoe.get_total() - dealer_extra_hand.get_total(),
+                ),
+            }
         }
-    } as f64;
+    };
+    let current_valid_shoe_total = current_valid_shoe_total as f64;
 
     // Case 2: Dealer must hit.
-    for card in 1..=10 {
+    for card in next_card_min..=next_card_max {
         if dealer_extra_hand[card] == original_shoe[card] {
-            continue;
-        }
-        if dealer_potential_natural && card == 11 - dealer_up_card {
             continue;
         }
 
@@ -336,7 +374,7 @@ mod tests {
             dealer_hit_on_soft17: true,
             allow_das: true,
             allow_late_surrender: true,
-            dealer_peek_hole_card: true,
+            peek_policy: crate::PeekPolicy::UpAceOrTen,
 
             payout_blackjack: 1.5,
             payout_insurance: 0.0,
@@ -422,7 +460,8 @@ mod tests {
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
-                let (_, decision) = sol.general_solution[&initial_hand].get_max_expectation(false);
+                let (_, decision) = sol.general_solution[&initial_hand]
+                    .get_max_expectation(false, rule.allow_late_surrender);
                 print!("{} ", decision_to_char(decision));
             }
             println!();
@@ -449,7 +488,8 @@ mod tests {
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
-                let (_, decision) = sol.general_solution[&initial_hand].get_max_expectation(false);
+                let (_, decision) = sol.general_solution[&initial_hand]
+                    .get_max_expectation(false, rule.allow_late_surrender);
                 print!("{} ", decision_to_char(decision));
             }
             println!();
