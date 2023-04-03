@@ -2,36 +2,6 @@ use super::{Decision, Rule};
 use crate::{CardCount, InitialSituation, StateArray};
 use std::{cmp::Ordering, ops};
 
-const PERM_SIZE: usize = 500;
-static PERM: [[u128; PERM_SIZE]; PERM_SIZE] = get_perm();
-
-/// Gets the lookup table of permutatiions. It is OK to ignore the integer type
-/// overflow, because in our case, we only need some small numbers.
-const fn get_perm() -> [[u128; PERM_SIZE]; PERM_SIZE] {
-    let mut ret: [[u128; PERM_SIZE]; PERM_SIZE] = [[0; PERM_SIZE]; PERM_SIZE];
-
-    let mut i = 0;
-    let mut j;
-    let mut cur: u128;
-    while i < ret.len() {
-        ret[i][0] = 1;
-        j = 1;
-        cur = i as u128;
-        while j <= i {
-            ret[i][j] = ret[i][j - 1] * cur;
-            if ret[i][j] >= 1 << 110 {
-                ret[i][j] = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffff;
-                break;
-            }
-            j += 1;
-            cur -= 1;
-        }
-        i += 1;
-    }
-
-    ret
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct MaxExpectation {
     pub hit: f64,
@@ -77,7 +47,6 @@ pub struct SolutionForInitialSituation {
     /// Note that this doesn't take the following cases into consideration:
     /// 1. Split pairs
     /// 2. Buy insurance
-    /// 3. Blackjack (both for player and dealer)
     pub general_solution: StateArray<MaxExpectation>,
     pub split_expectation: f64,
 }
@@ -249,11 +218,7 @@ fn calculate_stand_odds(
         &mut odds,
     );
 
-    // Here we normalize the odds, because the sum of it may not be 1.0. This is because
-    // dealer should not get natural Blackjack.
-    let result = odds[&dealer_extra_hand];
-    let sum_odd = result.win + result.push + result.lose;
-    result * (1.0 / sum_odd)
+    odds[&dealer_extra_hand]
 }
 
 /// Note that the callers of this function must ensure that if player_sum is 21, it must NOT be
@@ -277,17 +242,15 @@ fn memoization_find_win_lose_cases_count(
     // Case 1: Dealer must stand.
     let dealer_sum = dealer_extra_hand.get_sum() + (*dealer_up_card as u16);
     let is_soft = dealer_extra_hand.is_soft() || *dealer_up_card == 1;
-    let p = 1.0
-        / (PERM[original_shoe.get_total() as usize][dealer_extra_hand.get_total() as usize] as f64);
     if dealer_sum > 21 {
         odds[dealer_extra_hand] = WinLoseCasesOdds {
-            win: p,
+            win: 1.0,
             ..Default::default()
         };
         return;
     }
     if dealer_sum >= 17 {
-        add_to_win_lose_cases_count(*player_sum, dealer_sum, &mut odds[dealer_extra_hand], p);
+        add_to_win_lose_cases_count(*player_sum, dealer_sum, &mut odds[dealer_extra_hand], 1.0);
         return;
     }
     if is_soft {
@@ -296,22 +259,35 @@ fn memoization_find_win_lose_cases_count(
         // Note that the propability p is not added to odds. This makes the final result not equal
         // to 1.0.
         if dealer_sum + 10 == 21 && dealer_extra_hand.get_total() == 1 {
-            odds[dealer_extra_hand] = Default::default();
-            return;
+            panic!("Invalid state reached");
         } else if rule.dealer_hit_on_soft17 && dealer_sum + 10 > 17 && dealer_sum + 10 <= 21 {
             add_to_win_lose_cases_count(
                 *player_sum,
                 dealer_sum + 10,
                 &mut odds[dealer_extra_hand],
-                p,
+                1.0,
             );
             return;
         }
     }
 
+    let dealer_potential_natural =
+        dealer_extra_hand.get_total() == 0 && (*dealer_up_card == 1 || *dealer_up_card == 10);
+
+    let current_valid_shoe_total = {
+        if dealer_potential_natural {
+            original_shoe.get_total() - original_shoe[11 - dealer_up_card]
+        } else {
+            original_shoe.get_total() - dealer_extra_hand.get_total()
+        }
+    } as f64;
+
     // Case 2: Dealer must hit.
     for card in 1..=10 {
         if dealer_extra_hand[card] == original_shoe[card] {
+            continue;
+        }
+        if dealer_potential_natural && card == 11 - dealer_up_card {
             continue;
         }
 
@@ -327,8 +303,9 @@ fn memoization_find_win_lose_cases_count(
         let next_state_odds = odds[dealer_extra_hand];
         dealer_extra_hand.remove_card(card);
 
-        odds[dealer_extra_hand] +=
-            &(next_state_odds * ((original_shoe[card] - dealer_extra_hand[card]) as f64));
+        odds[dealer_extra_hand] += &(next_state_odds
+            * (((original_shoe[card] - dealer_extra_hand[card]) as f64)
+                / current_valid_shoe_total));
     }
 }
 
@@ -369,13 +346,13 @@ mod tests {
     #[test]
     fn test_find_win_lose_cases_count() {
         let rule = get_typical_rule();
-        let original_shoe = CardCount::new(&[10, 0, 0, 0, 0, 0, 0, 0, 10, 0]);
+        let original_shoe = CardCount::new(&[0, 0, 1, 0, 0, 0, 1, 0, 0, 1]);
         let mut dealer_extra_hand = CardCount::new(&[0; 10]);
         let mut odds = StateArray::new();
         memoization_find_win_lose_cases_count(
             &rule,
-            &21,
-            &10,
+            &18,
+            &1,
             &original_shoe,
             &mut dealer_extra_hand,
             &mut odds,
@@ -393,8 +370,8 @@ mod tests {
         let mut counts = [4 * (rule.number_of_decks as u16); 10];
         counts[9] = 16 * (rule.number_of_decks as u16);
         let mut shoe = CardCount::new(&counts);
-        let hand_cards = (2, 3);
-        let dealer_up_card = 10;
+        let hand_cards = (9, 2);
+        let dealer_up_card = 1;
         shoe.remove_card(hand_cards.0);
         shoe.remove_card(hand_cards.1);
         shoe.remove_card(dealer_up_card);

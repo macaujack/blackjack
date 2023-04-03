@@ -18,18 +18,18 @@ mod tests {
     }
 
     impl Shoe {
-        fn new(number_of_decks: u8, cut_card_proportion: f64) -> Shoe {
+        fn new(number_of_decks: u8, cut_card_proportion: f64, firsts: &Vec<u8>) -> Shoe {
             Shoe {
                 number_of_decks,
                 cut_card_index: (cut_card_proportion * (number_of_decks as u16 * 52) as f64)
                     as usize,
-                cards: generate_random_shoe(number_of_decks),
+                cards: generate_random_shoe_with_firsts(number_of_decks, firsts),
                 current_index: 0,
             }
         }
 
-        fn reinit(&mut self) {
-            self.cards.shuffle(&mut thread_rng());
+        fn reinit(&mut self, start_index: usize) {
+            self.cards[start_index..].shuffle(&mut thread_rng());
             self.current_index = 0;
         }
 
@@ -66,6 +66,29 @@ mod tests {
         }
 
         ret.shuffle(&mut thread_rng());
+        ret
+    }
+
+    fn generate_random_shoe_with_firsts(number_of_decks: u8, firsts: &Vec<u8>) -> Vec<u8> {
+        let mut counts = [number_of_decks * 4; 10];
+        counts[9] = number_of_decks * 16;
+        let number_of_decks = number_of_decks as usize;
+        let mut ret: Vec<u8> = vec![0; number_of_decks * 52];
+        let mut idx = 0;
+        for card in firsts {
+            counts[(card - 1) as usize] -= 1;
+            ret[idx] = *card;
+            idx += 1;
+        }
+
+        for i in 1..=10 {
+            for _ in 0..counts[(i - 1) as usize] {
+                ret[idx] = i;
+                idx += 1;
+            }
+        }
+
+        ret[firsts.len()..].shuffle(&mut thread_rng());
         ret
     }
 
@@ -169,6 +192,14 @@ mod tests {
     #[test]
     fn test_generate_random_shoe() {
         let shoe = generate_random_shoe(1);
+        println!("{:#?}", shoe);
+    }
+
+    #[test]
+    fn test_generate_random_shoe_with_firsts() {
+        let number_of_decks = 1;
+        let shoe = generate_random_shoe_with_firsts(number_of_decks, &vec![1, 5, 2]);
+        assert_eq!(shoe.len(), number_of_decks as usize * 52);
         println!("{:#?}", shoe);
     }
 
@@ -296,7 +327,8 @@ mod tests {
     #[test]
     fn test_strategy_on_new_shoe() {
         println!("Test begin!!!");
-        let mut shoe = Shoe::new(8, 0.5);
+        let firsts = vec![1, 5, 2];
+        let mut shoe = Shoe::new(8, 0.5, &firsts);
         let mut basic_strategy: BasicStrategy = Default::default();
         let mut my_strategy: MyStrategy = MyStrategy {
             sol: SolutionForInitialSituation {
@@ -314,9 +346,9 @@ mod tests {
         let mut duration_min: u128 = u128::MAX;
         let mut duration_total: u128 = 0;
         for round in 0..total_rounds {
-            shoe.reinit();
+            shoe.reinit(firsts.len());
             while shoe.cards[0] == 1 && shoe.cards[2] == 1 {
-                shoe.reinit();
+                shoe.reinit(firsts.len());
             }
             // shoe.cards[0] = 1;
             // shoe.cards[1] = 9;
