@@ -229,15 +229,12 @@ fn calculate_stand_odds(
 
     // Special case: Player hand is natural Blackjack
     if player_hand.is_natural() {
-        let p_dealer_also_natural = match *dealer_up_card {
-            1 => shoe.get_proportion(10),
-            10 => shoe.get_proportion(1),
-            _ => 0.0,
-        };
+        // Here we don't need to take dealer natural Blackjack into consideration, because if she
+        // does get Blackjack, the game should have finished already. That is, this is a problem
+        // of conditional probability.
         return WinLoseCasesOdds {
-            win: 1.0 - p_dealer_also_natural,
-            push: p_dealer_also_natural,
-            lose: 0.0,
+            win: 1.0,
+            ..Default::default()
         };
     }
 
@@ -252,7 +249,11 @@ fn calculate_stand_odds(
         &mut odds,
     );
 
-    odds[&dealer_extra_hand]
+    // Here we normalize the odds, because the sum of it may not be 1.0. This is because
+    // dealer should not get natural Blackjack.
+    let result = odds[&dealer_extra_hand];
+    let sum_odd = result.win + result.push + result.lose;
+    result * (1.0 / sum_odd)
 }
 
 /// Note that the callers of this function must ensure that if player_sum is 21, it must NOT be
@@ -289,11 +290,13 @@ fn memoization_find_win_lose_cases_count(
         add_to_win_lose_cases_count(*player_sum, dealer_sum, &mut odds[dealer_extra_hand], p);
         return;
     }
-    // if is_soft && rule.dealer_hit_on_soft17 && dealer_sum + 10 > 17 && dealer_sum + 10 <= 21 {
     if is_soft {
-        // Dealer gets natural Blackjack!! OMG!
+        // Dealer gets natural Blackjack, which is an invalid situation, because if dealer does get
+        // natural Blackjac, the game finishes at the very beginning.
+        // Note that the propability p is not added to odds. This makes the final result not equal
+        // to 1.0.
         if dealer_sum + 10 == 21 && dealer_extra_hand.get_total() == 1 {
-            odds[dealer_extra_hand].lose += p;
+            odds[dealer_extra_hand] = Default::default();
             return;
         } else if rule.dealer_hit_on_soft17 && dealer_sum + 10 > 17 && dealer_sum + 10 <= 21 {
             add_to_win_lose_cases_count(
@@ -366,13 +369,13 @@ mod tests {
     #[test]
     fn test_find_win_lose_cases_count() {
         let rule = get_typical_rule();
-        let original_shoe = CardCount::new(&[0, 0, 0, 0, 0, 0, 0, 0, 10, 10]);
+        let original_shoe = CardCount::new(&[10, 0, 0, 0, 0, 0, 0, 0, 10, 0]);
         let mut dealer_extra_hand = CardCount::new(&[0; 10]);
         let mut odds = StateArray::new();
         memoization_find_win_lose_cases_count(
             &rule,
             &21,
-            &1,
+            &10,
             &original_shoe,
             &mut dealer_extra_hand,
             &mut odds,
@@ -390,8 +393,8 @@ mod tests {
         let mut counts = [4 * (rule.number_of_decks as u16); 10];
         counts[9] = 16 * (rule.number_of_decks as u16);
         let mut shoe = CardCount::new(&counts);
-        let hand_cards = (7, 2);
-        let dealer_up_card = 7;
+        let hand_cards = (2, 3);
+        let dealer_up_card = 10;
         shoe.remove_card(hand_cards.0);
         shoe.remove_card(hand_cards.1);
         shoe.remove_card(dealer_up_card);
@@ -407,5 +410,82 @@ mod tests {
         initial_hand.add_card(hand_cards.0);
         initial_hand.add_card(hand_cards.1);
         println!("{:#?}", sol.general_solution[&initial_hand]);
+    }
+
+    #[test]
+    fn print_basic_strategy() {
+        let rule = get_typical_rule();
+
+        let mut counts = [4 * (rule.number_of_decks as u16); 10];
+        counts[9] = 16 * (rule.number_of_decks as u16);
+        let counts = counts;
+
+        println!("Hard:");
+        for my_hand_total in 5..=18 {
+            for dealer_up_card in 1..=10 {
+                let mut shoe = CardCount::new(&counts);
+                let hand_cards = {
+                    if my_hand_total - 2 <= 10 {
+                        (2, my_hand_total - 2)
+                    } else {
+                        (10, my_hand_total - 10)
+                    }
+                };
+                shoe.remove_card(hand_cards.0);
+                shoe.remove_card(hand_cards.1);
+                shoe.remove_card(dealer_up_card);
+
+                let initial_situation = InitialSituation {
+                    shoe,
+                    hand_cards,
+                    dealer_up_card,
+                };
+
+                let sol = calculate_solution(&rule, &initial_situation);
+                let mut initial_hand = CardCount::new(&[0; 10]);
+                initial_hand.add_card(hand_cards.0);
+                initial_hand.add_card(hand_cards.1);
+                let (_, decision) = sol.general_solution[&initial_hand].get_max_expectation(false);
+                print!("{} ", decision_to_char(decision));
+            }
+            println!();
+        }
+
+        println!();
+        println!("Soft:");
+
+        for another_card in 2..=9 {
+            for dealer_up_card in 1..=10 {
+                let mut shoe = CardCount::new(&counts);
+                let hand_cards = (1, another_card);
+                shoe.remove_card(hand_cards.0);
+                shoe.remove_card(hand_cards.1);
+                shoe.remove_card(dealer_up_card);
+
+                let initial_situation = InitialSituation {
+                    shoe,
+                    hand_cards,
+                    dealer_up_card,
+                };
+
+                let sol = calculate_solution(&rule, &initial_situation);
+                let mut initial_hand = CardCount::new(&[0; 10]);
+                initial_hand.add_card(hand_cards.0);
+                initial_hand.add_card(hand_cards.1);
+                let (_, decision) = sol.general_solution[&initial_hand].get_max_expectation(false);
+                print!("{} ", decision_to_char(decision));
+            }
+            println!();
+        }
+    }
+
+    fn decision_to_char(decision: Decision) -> char {
+        match decision {
+            Decision::Hit => 'H',
+            Decision::Stand => 'S',
+            Decision::Double => 'D',
+            Decision::Surrender => 'R',
+            _ => panic!("wtf"),
+        }
     }
 }

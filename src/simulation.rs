@@ -1,5 +1,7 @@
 #[cfg(test)]
 mod tests {
+    use std::{alloc::System, time::SystemTime};
+
     use rand::seq::SliceRandom;
     use rand::thread_rng;
 
@@ -293,6 +295,7 @@ mod tests {
 
     #[test]
     fn test_strategy_on_new_shoe() {
+        println!("Test begin!!!");
         let mut shoe = Shoe::new(8, 0.5);
         let mut basic_strategy: BasicStrategy = Default::default();
         let mut my_strategy: MyStrategy = MyStrategy {
@@ -305,7 +308,11 @@ mod tests {
 
         let mut acc_basic: i32 = 0;
         let mut acc_my: i32 = 0;
-        let total_rounds = 1000;
+        let total_rounds = 1_000_000;
+
+        let mut duration_max: u128 = 0;
+        let mut duration_min: u128 = u128::MAX;
+        let mut duration_total: u128 = 0;
         for round in 0..total_rounds {
             shoe.reinit();
             while shoe.cards[0] == 1 && shoe.cards[2] == 1 {
@@ -330,9 +337,30 @@ mod tests {
             let (profit_basic, _) = play_a_round(&rule, &mut basic_strategy, &mut shoe);
             acc_basic += profit_basic;
             shoe.retry();
+            let time_start = SystemTime::now();
             let (profit_my, _) = play_a_round(&rule, &mut my_strategy, &mut shoe);
+            let duration = SystemTime::now()
+                .duration_since(time_start)
+                .unwrap()
+                .as_millis();
+            if duration_max < duration {
+                duration_max = duration;
+            }
+            if duration_min > duration {
+                duration_min = duration;
+            }
+            duration_total += duration;
             acc_my += profit_my;
-            println!("Turn #{}: {:#?}, {:#?}", round, acc_basic, acc_my);
+            println!(
+                "Turn #{}: {:#?}, {:#?} this({:.2}s) max({:.2}s) avg({:.2}s) min({:.2}s)",
+                round,
+                acc_basic,
+                acc_my,
+                duration as f64 / 1000.0,
+                duration_max as f64 / 1000.0,
+                duration_total as f64 / (round + 1) as f64 / 1000.0,
+                duration_min as f64 / 1000.0,
+            );
         }
         println!();
         println!("Acc: {}, {}", acc_basic, acc_my);
