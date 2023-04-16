@@ -2,6 +2,7 @@ pub mod calculation;
 pub mod simulation;
 mod statearray;
 
+use serde_enum_str::{Deserialize_enum_str, Serialize_enum_str};
 pub use statearray::CardCount;
 pub use statearray::StateArray;
 
@@ -21,14 +22,14 @@ pub struct Rule {
     pub payout_insurance: f64, // TODO: Use this.
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize_enum_str, Deserialize_enum_str)]
 pub enum DoublePolicy {
     AnyTwo,
     NineTenElevenOnly,
     TenElevenOnly,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize_enum_str, Deserialize_enum_str)]
 pub enum PeekPolicy {
     UpAceOrTen,
     UpAce,
