@@ -79,6 +79,12 @@ impl CardCount {
         card_count
     }
 
+    pub fn with_number_of_decks(number_of_decks: u8) -> CardCount {
+        let mut counts = [(number_of_decks * 4) as u16; 10];
+        counts[9] = (number_of_decks * 16) as u16;
+        Self::new(&counts)
+    }
+
     /// Add a card of given card value.
     ///
     /// Note that this method won't check if the card value is valid.

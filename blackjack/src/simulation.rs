@@ -1,404 +1,334 @@
-#[cfg(test)]
-mod tests {
-    use std::{alloc::System, time::SystemTime};
+pub mod hand;
+pub mod shoe;
+pub mod strategy;
 
-    use rand::seq::SliceRandom;
-    use rand::thread_rng;
+use crate::{Decision, InitialSituation, Rule};
+use strum_macros::EnumIter;
 
-    use crate::{
-        calculation::{calculate_solution, SolutionForInitialSituation},
-        CardCount, Decision, InitialSituation, Rule, StateArray,
-    };
+static FACE_VALUE_TO_BLACKJACK_VALUE: [u8; 13] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10];
 
-    struct Shoe {
-        number_of_decks: u8,
-        cut_card_index: usize,
-        cards: Vec<u8>,
-        current_index: usize,
-    }
+#[derive(Debug, Clone, Copy, PartialEq, EnumIter)]
+pub enum Suit {
+    Diamond = 0,
+    Club,
+    Heart,
+    Spade,
+}
 
-    impl Shoe {
-        fn new(number_of_decks: u8, cut_card_proportion: f64, firsts: &Vec<u8>) -> Shoe {
-            Shoe {
-                number_of_decks,
-                cut_card_index: (cut_card_proportion * (number_of_decks as u16 * 52) as f64)
-                    as usize,
-                cards: generate_random_shoe_with_firsts(number_of_decks, firsts),
-                current_index: 0,
-            }
-        }
+/// Represents a card in the real world with a suit and a face value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Card {
+    pub face_value: u8,
+    pub suit: Suit,
+}
 
-        fn reinit(&mut self, start_index: usize) {
-            self.cards[start_index..].shuffle(&mut thread_rng());
-            self.current_index = 0;
-        }
-
-        fn retry(&mut self) {
-            self.current_index = 0;
-        }
-
-        fn deal_card(&mut self) -> (u8, bool) {
-            self.current_index += 1;
-            (
-                self.cards[self.current_index - 1],
-                self.current_index >= self.cut_card_index,
-            )
-        }
-
-        fn reached_cut_card(&self) -> bool {
-            self.current_index >= self.cut_card_index
-        }
-    }
-
-    fn generate_random_shoe(number_of_decks: u8) -> Vec<u8> {
-        let number_of_decks = number_of_decks as usize;
-        let mut ret: Vec<u8> = vec![0; number_of_decks * 52];
-        let mut idx = 0;
-        for i in 1..10 {
-            for _ in 0..number_of_decks * 4 {
-                ret[idx] = i;
-                idx += 1;
-            }
-        }
-        for _ in 0..number_of_decks * 16 {
-            ret[idx] = 10;
-            idx += 1;
-        }
-
-        ret.shuffle(&mut thread_rng());
-        ret
-    }
-
-    fn generate_random_shoe_with_firsts(number_of_decks: u8, firsts: &Vec<u8>) -> Vec<u8> {
-        let mut counts = [number_of_decks * 4; 10];
-        counts[9] = number_of_decks * 16;
-        let number_of_decks = number_of_decks as usize;
-        let mut ret: Vec<u8> = vec![0; number_of_decks * 52];
-        let mut idx = 0;
-        for card in firsts {
-            counts[(card - 1) as usize] -= 1;
-            ret[idx] = *card;
-            idx += 1;
-        }
-
-        for i in 1..=10 {
-            for _ in 0..counts[(i - 1) as usize] {
-                ret[idx] = i;
-                idx += 1;
-            }
-        }
-
-        ret[firsts.len()..].shuffle(&mut thread_rng());
-        ret
-    }
-
-    trait Strategy {
-        fn init(&mut self, rule: &Rule, initial_situation: &InitialSituation);
-        fn make_decision(&self, current_hand: &CardCount) -> Decision;
-    }
-
-    #[derive(Default)]
-    struct BasicStrategy {
-        dealer_up_card: u8,
-        hard_charts: [[Decision; 10]; 14],
-        soft_charts: [[Decision; 10]; 9],
-    }
-
-    const H: Decision = Decision::Hit;
-    const S: Decision = Decision::Stand;
-    const D: Decision = Decision::Double;
-    const R: Decision = Decision::Surrender;
-
-    impl Strategy for BasicStrategy {
-        fn init(&mut self, rule: &Rule, initial_situation: &InitialSituation) {
-            self.dealer_up_card = initial_situation.dealer_up_card;
-            self.hard_charts = [
-                [H, H, H, H, H, H, H, H, H, H], // 5
-                [H, H, H, H, H, H, H, H, H, H],
-                [H, H, H, H, H, H, H, H, H, H],
-                [H, H, H, H, H, H, H, H, H, H],
-                [H, H, D, D, D, D, H, H, H, H],
-                [H, D, D, D, D, D, D, D, D, H],
-                [D, D, D, D, D, D, D, D, D, D],
-                [H, H, H, S, S, S, H, H, H, H],
-                [H, S, S, S, S, S, H, H, H, H],
-                [H, S, S, S, S, S, H, H, H, H],
-                [R, S, S, S, S, S, H, H, H, R],
-                [R, S, S, S, S, S, H, H, R, R],
-                [R, S, S, S, S, S, S, S, S, S], // 17
-                [S, S, S, S, S, S, S, S, S, S], // 18, 18+
-            ];
-            self.soft_charts = [
-                [H, H, H, H, D, D, H, H, H, H], // Ace + 2
-                [H, H, H, H, D, D, H, H, H, H],
-                [H, H, H, D, D, D, H, H, H, H],
-                [H, H, H, D, D, D, H, H, H, H],
-                [H, H, D, D, D, D, H, H, H, H],
-                [H, D, D, D, D, D, S, S, H, H],
-                [S, S, S, S, S, D, S, S, S, S],
-                [S, S, S, S, S, S, S, S, S, S], // Ace + 9
-                [S, S, S, S, S, S, S, S, S, S], // Ace + 10
-            ]
-        }
-
-        fn make_decision(&self, current_hand: &CardCount) -> Decision {
-            let col = (self.dealer_up_card - 1) as usize;
-            if current_hand.get_total() == 2 && current_hand[1] == 2 {
-                return Decision::Split;
-            }
-
-            if current_hand.is_soft() && current_hand.get_sum() + 10 <= 21 {
-                if current_hand[10] == 1 {
-                    Decision::Stand
-                } else {
-                    let another_card = current_hand.get_sum() - 1;
-                    let row = (another_card - 2) as usize;
-                    self.soft_charts[row][col]
-                }
-            } else {
-                let row = {
-                    if current_hand.get_sum() <= 5 {
-                        0
-                    } else if current_hand.get_sum() >= 18 {
-                        13
-                    } else {
-                        current_hand.get_sum() - 5
-                    }
-                } as usize;
-                self.hard_charts[row][col]
-            }
-        }
-    }
-
-    struct MyStrategy {
-        sol: SolutionForInitialSituation,
-        rule: Rule,
-    }
-
-    impl Strategy for MyStrategy {
-        fn init(&mut self, rule: &Rule, initial_situation: &InitialSituation) {
-            self.sol = calculate_solution(rule, initial_situation);
-            self.rule = *rule;
-        }
-        fn make_decision(&self, current_hand: &CardCount) -> Decision {
-            if current_hand.get_total() == 2 && current_hand[1] == 2 {
-                return Decision::Split;
-            }
-
-            let (_, decision) = self.sol.general_solution[current_hand]
-                .get_max_expectation(current_hand.bust(), self.rule.allow_late_surrender);
-            decision
-        }
-    }
-
-    #[test]
-    fn test_generate_random_shoe() {
-        let shoe = generate_random_shoe(1);
-        println!("{:#?}", shoe);
-    }
-
-    #[test]
-    fn test_generate_random_shoe_with_firsts() {
-        let number_of_decks = 1;
-        let shoe = generate_random_shoe_with_firsts(number_of_decks, &vec![1, 5, 2]);
-        assert_eq!(shoe.len(), number_of_decks as usize * 52);
-        println!("{:#?}", shoe);
-    }
-
-    // Bet 100
-    fn play_a_round<T: Strategy>(rule: &Rule, strategy: &mut T, shoe: &mut Shoe) -> (i32, bool) {
-        let (my_first_card, _) = shoe.deal_card();
-        let (dealer_up_card, _) = shoe.deal_card();
-        let (my_second_card, _) = shoe.deal_card();
-        let mut counts = [0; 10];
-        for i in shoe.current_index..shoe.cards.len() {
-            counts[(shoe.cards[i] - 1) as usize] += 1;
-        }
-        let initial_shoe = CardCount::new(&counts);
-
-        let initial_situation = InitialSituation::new(
-            initial_shoe,
-            (my_first_card, my_second_card),
-            dealer_up_card,
-        );
-        strategy.init(rule, &initial_situation);
-        let (dealer_hole_card, _) = shoe.deal_card();
-
-        let mut current_hand = CardCount::new(&[0; 10]);
-        current_hand.add_card(my_first_card);
-        current_hand.add_card(my_second_card);
-
-        let dealer_natural_blackjack = dealer_up_card + dealer_hole_card == 11
-            && (dealer_up_card == 1 || dealer_hole_card == 1);
-        let me_natural_blackjack = current_hand.get_sum() == 11 && current_hand.is_soft();
-
-        if dealer_natural_blackjack {
-            if me_natural_blackjack {
-                return (0, shoe.reached_cut_card());
-            }
-            return (-100, shoe.reached_cut_card());
-        }
-
-        let mut bet = 100;
-        let mut has_surrendered = false;
-        loop {
-            if current_hand.get_sum() > 21 {
-                break;
-            }
-            let my_decision = strategy.make_decision(&current_hand);
-            print!("{:#?} ", my_decision);
-            match my_decision {
-                Decision::Hit => {
-                    let (card, _) = shoe.deal_card();
-                    current_hand.add_card(card);
-                }
-                Decision::Stand => {
-                    break;
-                }
-                Decision::Double => {
-                    let (card, _) = shoe.deal_card();
-                    current_hand.add_card(card);
-                    bet *= 2;
-                    break;
-                }
-                Decision::Surrender => {
-                    has_surrendered = true;
-                    break;
-                }
-                _ => {
-                    panic!("wtf??")
-                }
-            }
-        }
-        println!();
-
-        let my_sum = {
-            if current_hand.is_soft() && current_hand.get_sum() + 10 <= 21 {
-                current_hand.get_sum() + 10
-            } else {
-                current_hand.get_sum()
-            }
-        };
-
-        let mut dealer_sum = dealer_up_card + dealer_hole_card;
-        let mut dealer_soft = dealer_up_card == 1 || dealer_hole_card == 1;
-        while !(dealer_sum >= 17 || dealer_soft && dealer_sum + 10 > 17 && dealer_sum + 10 <= 21) {
-            let (card, _) = shoe.deal_card();
-            dealer_soft = dealer_soft || card == 1;
-            dealer_sum += card;
-        }
-        if dealer_sum < 17 {
-            dealer_sum += 10;
-        }
-        let dealer_sum = dealer_sum as u16;
-
-        if has_surrendered {
-            bet = -bet / 2;
-        } else if my_sum > 21 {
-            bet = -bet;
-        } else if me_natural_blackjack {
-            bet += bet / 2;
-        } else if dealer_sum <= 21 {
-            if my_sum < dealer_sum {
-                bet = -bet;
-            } else if my_sum == dealer_sum {
-                bet = 0;
-            }
-        }
-
-        (bet, shoe.reached_cut_card())
-    }
-
-    fn get_typical_rule() -> Rule {
-        Rule {
-            number_of_decks: 8,
-            cut_card_proportion: 0.5,
-            split_all_limits: 1,
-            split_ace_limits: 1,
-            double_policy: crate::DoublePolicy::AnyTwo,
-            dealer_hit_on_soft17: true,
-            allow_das: true,
-            allow_late_surrender: true,
-            peek_policy: crate::PeekPolicy::UpAceOrTen,
-
-            payout_blackjack: 1.5,
-            payout_insurance: 0.0,
-        }
-    }
-
-    #[test]
-    fn test_strategy_on_new_shoe() {
-        println!("Test begin!!!");
-        let firsts = vec![1, 5, 2];
-        let mut shoe = Shoe::new(8, 0.5, &firsts);
-        let rule = get_typical_rule();
-        let mut basic_strategy: BasicStrategy = Default::default();
-        let mut my_strategy: MyStrategy = MyStrategy {
-            rule: rule,
-            sol: SolutionForInitialSituation {
-                general_solution: StateArray::new(),
-                split_expectation: 0.0,
-            },
-        };
-
-        let mut acc_basic: i32 = 0;
-        let mut acc_my: i32 = 0;
-        let total_rounds = 1_000_000;
-
-        let mut duration_max: u128 = 0;
-        let mut duration_min: u128 = u128::MAX;
-        let mut duration_total: u128 = 0;
-        for round in 0..total_rounds {
-            shoe.reinit(firsts.len());
-            while shoe.cards[0] == 1 && shoe.cards[2] == 1 {
-                shoe.reinit(firsts.len());
-            }
-            // shoe.cards[0] = 1;
-            // shoe.cards[1] = 9;
-            // shoe.cards[2] = 2;
-            // shoe.cards[3] = 10;
-            // shoe.cards[4] = 8;
-            // shoe.cards[5] = 10;
-            // shoe.cards[6] = 7;
-            // shoe.cards[7] = 2;
-            // shoe.cards[8] = 9;
-            // shoe.cards[9] = 2;
-            // shoe.cards[10] = 10;
-            print!("Turn #{}: ", round);
-            for i in 0..20 {
-                print!("{} ", shoe.cards[i]);
-            }
-            println!();
-            let (profit_basic, _) = play_a_round(&rule, &mut basic_strategy, &mut shoe);
-            acc_basic += profit_basic;
-            shoe.retry();
-            let time_start = SystemTime::now();
-            let (profit_my, _) = play_a_round(&rule, &mut my_strategy, &mut shoe);
-            let duration = SystemTime::now()
-                .duration_since(time_start)
-                .unwrap()
-                .as_millis();
-            if duration_max < duration {
-                duration_max = duration;
-            }
-            if duration_min > duration {
-                duration_min = duration;
-            }
-            duration_total += duration;
-            acc_my += profit_my;
-            println!(
-                "Turn #{}: {:#?}, {:#?} this({:.2}s) max({:.2}s) avg({:.2}s) min({:.2}s)",
-                round,
-                acc_basic,
-                acc_my,
-                duration as f64 / 1000.0,
-                duration_max as f64 / 1000.0,
-                duration_total as f64 / (round + 1) as f64 / 1000.0,
-                duration_min as f64 / 1000.0,
-            );
-        }
-        println!();
-        println!("Acc: {}, {}", acc_basic, acc_my);
-        println!("Total rounds: {}", total_rounds);
+impl Card {
+    pub fn blackjack_value(&self) -> u8 {
+        FACE_VALUE_TO_BLACKJACK_VALUE[(self.face_value - 1) as usize]
     }
 }
+
+impl Default for Card {
+    fn default() -> Self {
+        Card {
+            face_value: 1,
+            suit: Suit::Diamond,
+        }
+    }
+}
+
+impl Into<u8> for Card {
+    fn into(self) -> u8 {
+        self.suit as u8 * 13 + self.face_value - 1
+    }
+}
+
+impl TryFrom<u8> for Card {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if value >= 52 {
+            Err(())
+        } else {
+            let suit = match value / 13 {
+                0 => Suit::Diamond,
+                1 => Suit::Club,
+                2 => Suit::Heart,
+                3 => Suit::Spade,
+                _ => panic!("Impossible to happen!"),
+            };
+            let card = Card {
+                suit,
+                face_value: value % 13 + 1,
+            };
+            Ok(card)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GamePhase {
+    WaitForPlayerSeat,
+    PlaceBets,
+    DealInitialCards,
+    DealerPeek,
+    WaitForRightPlayers,
+    Play,
+    WaitForLeftPlayers,
+    StartNewShoe,
+}
+
+pub struct Simulator<T: strategy::Strategy> {
+    rule: Rule,
+    number_of_players: u8,
+    seat_order: u8,
+    strategy: T,
+
+    // Game state
+    current_game_phase: GamePhase,
+    shoe: shoe::Shoe,
+    dealer_up_card: Card,
+
+    // My playing state
+    current_split_all_times: u8,
+    current_split_ace_times: u8,
+    current_playing_group_index: usize,
+    current_hand: hand::Hand,
+}
+
+impl<T: strategy::Strategy> Simulator<T> {
+    pub fn new(rule: &Rule) -> Self {
+        Self {
+            rule: *rule,
+            number_of_players: 0,
+            seat_order: 0,
+            strategy: T::new(rule),
+            current_game_phase: GamePhase::WaitForPlayerSeat,
+            shoe: shoe::Shoe::new(rule.number_of_decks, rule.cut_card_proportion),
+            dealer_up_card: Default::default(),
+            current_split_all_times: 0,
+            current_split_ace_times: 0,
+            current_playing_group_index: 0,
+            current_hand: hand::Hand::new(),
+        }
+    }
+
+    pub fn init_with_initial_situation(&mut self) {
+        let cards = self.current_hand.get_cards(0);
+        let initial_situation = InitialSituation::new(
+            self.shoe.get_card_count(),
+            (cards[0].blackjack_value(), cards[1].blackjack_value()),
+            self.dealer_up_card.blackjack_value(),
+        );
+        self.strategy
+            .init_with_initial_situation(&self.rule, &initial_situation);
+    }
+
+    pub fn make_decision(&mut self) -> Decision {
+        self.strategy.make_decision(
+            &self.rule,
+            &self
+                .current_hand
+                .get_card_counts(self.current_playing_group_index),
+            self.current_split_all_times,
+            self.current_split_ace_times,
+        )
+    }
+}
+
+// // Bet 100
+// fn play_a_round<T: Strategy>(rule: &Rule, strategy: &mut T, shoe: &mut Shoe) -> (i32, bool) {
+//     let (my_first_card, _) = shoe.deal_card();
+//     let (dealer_up_card, _) = shoe.deal_card();
+//     let (my_second_card, _) = shoe.deal_card();
+//     let mut counts = [0; 10];
+//     for i in shoe.current_index..shoe.cards.len() {
+//         counts[(shoe.cards[i] - 1) as usize] += 1;
+//     }
+//     let initial_shoe = CardCount::new(&counts);
+
+//     let initial_situation = InitialSituation::new(
+//         initial_shoe,
+//         (my_first_card, my_second_card),
+//         dealer_up_card,
+//     );
+//     strategy.init(rule, &initial_situation);
+//     let (dealer_hole_card, _) = shoe.deal_card();
+
+//     let mut current_hand = CardCount::new(&[0; 10]);
+//     current_hand.add_card(my_first_card);
+//     current_hand.add_card(my_second_card);
+
+//     let dealer_natural_blackjack =
+//         dealer_up_card + dealer_hole_card == 11 && (dealer_up_card == 1 || dealer_hole_card == 1);
+//     let me_natural_blackjack = current_hand.get_sum() == 11 && current_hand.is_soft();
+
+//     if dealer_natural_blackjack {
+//         if me_natural_blackjack {
+//             return (0, shoe.reached_cut_card());
+//         }
+//         return (-100, shoe.reached_cut_card());
+//     }
+
+//     let mut bet = 100;
+//     let mut has_surrendered = false;
+//     loop {
+//         if current_hand.get_sum() > 21 {
+//             break;
+//         }
+//         let my_decision = strategy.make_decision(&current_hand);
+//         print!("{:#?} ", my_decision);
+//         match my_decision {
+//             Decision::Hit => {
+//                 let (card, _) = shoe.deal_card();
+//                 current_hand.add_card(card);
+//             }
+//             Decision::Stand => {
+//                 break;
+//             }
+//             Decision::Double => {
+//                 let (card, _) = shoe.deal_card();
+//                 current_hand.add_card(card);
+//                 bet *= 2;
+//                 break;
+//             }
+//             Decision::Surrender => {
+//                 has_surrendered = true;
+//                 break;
+//             }
+//             _ => {
+//                 panic!("wtf??")
+//             }
+//         }
+//     }
+//     println!();
+
+//     let my_sum = {
+//         if current_hand.is_soft() && current_hand.get_sum() + 10 <= 21 {
+//             current_hand.get_sum() + 10
+//         } else {
+//             current_hand.get_sum()
+//         }
+//     };
+
+//     let mut dealer_sum = dealer_up_card + dealer_hole_card;
+//     let mut dealer_soft = dealer_up_card == 1 || dealer_hole_card == 1;
+//     while !(dealer_sum >= 17 || dealer_soft && dealer_sum + 10 > 17 && dealer_sum + 10 <= 21) {
+//         let (card, _) = shoe.deal_card();
+//         dealer_soft = dealer_soft || card == 1;
+//         dealer_sum += card;
+//     }
+//     if dealer_sum < 17 {
+//         dealer_sum += 10;
+//     }
+//     let dealer_sum = dealer_sum as u16;
+
+//     if has_surrendered {
+//         bet = -bet / 2;
+//     } else if my_sum > 21 {
+//         bet = -bet;
+//     } else if me_natural_blackjack {
+//         bet += bet / 2;
+//     } else if dealer_sum <= 21 {
+//         if my_sum < dealer_sum {
+//             bet = -bet;
+//         } else if my_sum == dealer_sum {
+//             bet = 0;
+//         }
+//     }
+
+//     (bet, shoe.reached_cut_card())
+// }
+
+// fn get_typical_rule() -> Rule {
+//     Rule {
+//         number_of_decks: 8,
+//         cut_card_proportion: 0.5,
+//         split_all_limits: 1,
+//         split_ace_limits: 1,
+//         double_policy: crate::DoublePolicy::AnyTwo,
+//         dealer_hit_on_soft17: true,
+//         allow_das: true,
+//         allow_late_surrender: true,
+//         peek_policy: crate::PeekPolicy::UpAceOrTen,
+
+//         payout_blackjack: 1.5,
+//         payout_insurance: 0.0,
+//     }
+// }
+
+// #[test]
+// fn test_strategy_on_new_shoe() {
+//     println!("Test begin!!!");
+//     let firsts = vec![1, 5, 2];
+//     let mut shoe = Shoe::new(8, 0.5, &firsts);
+//     let rule = get_typical_rule();
+//     let mut basic_strategy: BasicStrategy = Default::default();
+//     let mut my_strategy: MyStrategy = MyStrategy {
+//         rule: rule,
+//         sol: SolutionForInitialSituation {
+//             general_solution: StateArray::new(),
+//             split_expectation: 0.0,
+//         },
+//     };
+
+//     let mut acc_basic: i32 = 0;
+//     let mut acc_my: i32 = 0;
+//     let total_rounds = 1_000_000;
+
+//     let mut duration_max: u128 = 0;
+//     let mut duration_min: u128 = u128::MAX;
+//     let mut duration_total: u128 = 0;
+//     for round in 0..total_rounds {
+//         shoe.reinit(firsts.len());
+//         while shoe.cards[0] == 1 && shoe.cards[2] == 1 {
+//             shoe.reinit(firsts.len());
+//         }
+//         // shoe.cards[0] = 1;
+//         // shoe.cards[1] = 9;
+//         // shoe.cards[2] = 2;
+//         // shoe.cards[3] = 10;
+//         // shoe.cards[4] = 8;
+//         // shoe.cards[5] = 10;
+//         // shoe.cards[6] = 7;
+//         // shoe.cards[7] = 2;
+//         // shoe.cards[8] = 9;
+//         // shoe.cards[9] = 2;
+//         // shoe.cards[10] = 10;
+//         print!("Turn #{}: ", round);
+//         for i in 0..20 {
+//             print!("{} ", shoe.cards[i]);
+//         }
+//         println!();
+//         let (profit_basic, _) = play_a_round(&rule, &mut basic_strategy, &mut shoe);
+//         acc_basic += profit_basic;
+//         shoe.retry();
+//         let time_start = SystemTime::now();
+//         let (profit_my, _) = play_a_round(&rule, &mut my_strategy, &mut shoe);
+//         let duration = SystemTime::now()
+//             .duration_since(time_start)
+//             .unwrap()
+//             .as_millis();
+//         if duration_max < duration {
+//             duration_max = duration;
+//         }
+//         if duration_min > duration {
+//             duration_min = duration;
+//         }
+//         duration_total += duration;
+//         acc_my += profit_my;
+//         println!(
+//             "Turn #{}: {:#?}, {:#?} this({:.2}s) max({:.2}s) avg({:.2}s) min({:.2}s)",
+//             round,
+//             acc_basic,
+//             acc_my,
+//             duration as f64 / 1000.0,
+//             duration_max as f64 / 1000.0,
+//             duration_total as f64 / (round + 1) as f64 / 1000.0,
+//             duration_min as f64 / 1000.0,
+//         );
+//     }
+//     println!();
+//     println!("Acc: {}, {}", acc_basic, acc_my);
+//     println!("Total rounds: {}", total_rounds);
+// }
