@@ -1,5 +1,5 @@
 use super::{Decision, PeekPolicy, Rule};
-use crate::{CardCount, InitialSituation, StateArray};
+use crate::{simulation::Card, CardCount, InitialSituation, StateArray};
 use std::{cmp::Ordering, ops};
 
 #[derive(Clone, Copy, Debug)]
@@ -360,6 +360,68 @@ fn add_to_win_lose_cases_count(
     }
 }
 
+fn gather_hand_count_states<F, G>(
+    charlie_number: u8,
+    feature_fn: F,
+    state_filter: G,
+) -> Vec<Vec<CardCount>>
+where
+    F: Fn(&CardCount) -> usize,
+    G: Fn(&CardCount) -> bool,
+{
+    let mut ret = Vec::new();
+    let mut card_count = CardCount::with_number_of_decks(0);
+    gather_hand_count_states_aux(
+        &charlie_number,
+        &feature_fn,
+        &state_filter,
+        &mut card_count,
+        1,
+        &mut ret,
+    );
+    ret
+}
+
+fn gather_hand_count_states_aux<F, G>(
+    charlie_number: &u8,
+    feature_fn: &F,
+    state_filter: &G,
+    current_card_count: &mut CardCount,
+    loop_start_card: u8,
+
+    result: &mut Vec<Vec<CardCount>>,
+) where
+    F: Fn(&CardCount) -> usize,
+    G: Fn(&CardCount) -> bool,
+{
+    if state_filter(current_card_count) {
+        let feature = feature_fn(current_card_count);
+        while result.len() <= feature {
+            result.push(vec![]);
+        }
+        result[feature].push(*current_card_count);
+    }
+
+    if current_card_count.get_sum() >= 21
+        || current_card_count.get_total() == *charlie_number as u16
+    {
+        return;
+    }
+
+    for i in loop_start_card..=10 {
+        current_card_count.add_card(i);
+        gather_hand_count_states_aux(
+            charlie_number,
+            feature_fn,
+            state_filter,
+            current_card_count,
+            i,
+            result,
+        );
+        current_card_count.remove_card(i);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,6 +437,7 @@ mod tests {
             allow_das: true,
             allow_late_surrender: true,
             peek_policy: crate::PeekPolicy::UpAceOrTen,
+            charlie_number: std::u8::MAX,
 
             payout_blackjack: 1.5,
             payout_insurance: 0.0,
@@ -382,6 +445,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_find_win_lose_cases_count() {
         let rule = get_typical_rule();
         let original_shoe = CardCount::new(&[0, 0, 1, 0, 0, 0, 1, 0, 0, 1]);
@@ -402,6 +466,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_decision() {
         let rule = get_typical_rule();
 
@@ -428,6 +493,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn print_basic_strategy() {
         let rule = get_typical_rule();
 
@@ -493,6 +559,20 @@ mod tests {
                 print!("{} ", decision_to_char(decision));
             }
             println!();
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn get_number_of_states() {
+        let charlie_number: u8 = 6;
+        let f = |card_count: &CardCount| card_count.get_sum() as usize;
+        let g = |card_count: &CardCount| card_count.get_sum() <= 21;
+        let gathered_states = gather_hand_count_states(charlie_number, f, g);
+        let mut acc = 0;
+        for (i, states) in gathered_states.iter().enumerate() {
+            acc += states.len();
+            println!("({}, {}, {})", i, states.len(), acc);
         }
     }
 

@@ -17,6 +17,7 @@ pub struct Rule {
     pub allow_das: bool, // TODO: Use this.
     pub allow_late_surrender: bool,
     pub peek_policy: PeekPolicy,
+    pub charlie_number: u8, // TODO: Use this.
 
     pub payout_blackjack: f64,
     pub payout_insurance: f64, // TODO: Use this.

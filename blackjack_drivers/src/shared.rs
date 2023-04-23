@@ -19,6 +19,7 @@ pub struct ConfigRule {
     pub allow_das: bool,
     pub allow_late_surrender: bool,
     pub peek_policy: String,
+    pub charlie_number: u8,
 
     pub payout_blackjack: f64,
     pub payout_insurance: f64,
@@ -36,6 +37,7 @@ impl Into<Result<blackjack::Rule, serde::de::value::Error>> for ConfigRule {
             allow_das: self.allow_das,
             allow_late_surrender: self.allow_late_surrender,
             peek_policy: self.peek_policy.parse()?,
+            charlie_number: self.charlie_number,
             payout_blackjack: self.payout_blackjack,
             payout_insurance: self.payout_insurance,
         };
@@ -70,6 +72,7 @@ mod tests {
             allow_das: true,
             allow_late_surrender: true,
             peek_policy: String::from("UpAceOrTen"),
+            charlie_number: std::u8::MAX,
             payout_blackjack: 1.5,
             payout_insurance: 0.0,
         }
