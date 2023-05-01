@@ -1,5 +1,5 @@
 use crate::{
-    calculation::{calculate_solution, get_max_expectation, SolutionForInitialSituation},
+    calculation::{calculate_solution, get_max_expectation, MaxExpectation},
     CardCount, Decision, InitialSituation, Rule, StateArray,
 };
 
@@ -151,7 +151,7 @@ impl Strategy for BasicStrategy {
 }
 
 struct DpStrategy {
-    sol: SolutionForInitialSituation,
+    sol: StateArray<MaxExpectation>,
     rule: Rule,
 }
 
@@ -178,7 +178,7 @@ impl Strategy for DpStrategy {
             return Decision::Split;
         }
 
-        let (_, decision) = get_max_expectation(&self.sol.general_solution, current_hand, rule);
+        let (_, decision) = get_max_expectation(&self.sol, current_hand, rule);
         decision
     }
 }

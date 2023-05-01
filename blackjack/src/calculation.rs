@@ -8,6 +8,8 @@ mod calculation_states;
 pub struct MaxExpectation {
     pub hit: f64,
     pub stand: f64,
+    pub double: f64,
+    pub split: f64,
 }
 
 impl Default for MaxExpectation {
@@ -15,6 +17,8 @@ impl Default for MaxExpectation {
         MaxExpectation {
             hit: -f64::INFINITY,
             stand: -f64::INFINITY,
+            double: -f64::INFINITY,
+            split: -f64::INFINITY,
         }
     }
 }
@@ -48,25 +52,24 @@ pub fn get_max_expectation(
         max_ex = ex.hit;
         max_decision = Decision::Hit;
     }
+    if max_ex < ex.double {
+        // TODO: Take DAS into consideration
+        max_ex = ex.double;
+        max_decision = Decision::Double;
+    }
+    // TODO: Take Split into consideration
 
     (max_ex, max_decision)
 }
 
-#[derive(Default)]
-pub struct SolutionForInitialSituation {
-    /// Note that this doesn't take the following cases into consideration:
-    /// 1. Split pairs
-    /// 2. Buy insurance
-    pub general_solution: StateArray<MaxExpectation>,
-    pub double_expectation: f64,
-    pub split_expectation: f64,
-}
-
+/// Note that this doesn't take the following cases into consideration:
+/// 1. Split pairs
+/// 2. Buy insurance
 pub fn calculate_solution(
     rule: &Rule,
     initial_situation: &InitialSituation,
-) -> SolutionForInitialSituation {
-    let mut general_solution: StateArray<MaxExpectation> = StateArray::new();
+) -> StateArray<MaxExpectation> {
+    let mut general_solution = StateArray::new();
     let mut initial_hand = CardCount::new(&[0; 10]);
     initial_hand.add_card(initial_situation.hand_cards.0);
     initial_hand.add_card(initial_situation.hand_cards.1);
@@ -79,22 +82,8 @@ pub fn calculate_solution(
         &mut general_solution,
     );
 
-    let mut double_expectation = 0.0;
-    let current_hand = &mut initial_hand;
-    for i in 1..=10 {
-        current_hand.add_card(i);
-        let p = shoe.get_proportion(i);
-        double_expectation += p * general_solution[current_hand].stand;
-        current_hand.remove_card(i);
-    }
-    double_expectation *= 2.0;
-
     // TODO: Calculate the expectation when able to split.
-    SolutionForInitialSituation {
-        general_solution,
-        double_expectation,
-        split_expectation: -6666.0,
-    }
+    general_solution
 }
 
 fn memoization_find_solution(
@@ -463,7 +452,7 @@ mod tests {
         let mut initial_hand = CardCount::new(&[0; 10]);
         initial_hand.add_card(hand_cards.0);
         initial_hand.add_card(hand_cards.1);
-        println!("{:#?}", sol.general_solution[&initial_hand]);
+        println!("{:#?}", sol[&initial_hand]);
     }
 
     #[test]
@@ -500,11 +489,7 @@ mod tests {
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
-                let (max_ex, mut decision) =
-                    get_max_expectation(&sol.general_solution, &initial_hand, &rule);
-                if max_ex < sol.double_expectation {
-                    decision = Decision::Double;
-                }
+                let (max_ex, mut decision) = get_max_expectation(&sol, &initial_hand, &rule);
                 print!("{} ", decision_to_char(decision));
             }
             println!();
@@ -531,11 +516,7 @@ mod tests {
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
-                let (max_ex, mut decision) =
-                    get_max_expectation(&sol.general_solution, &initial_hand, &rule);
-                if max_ex < sol.double_expectation {
-                    decision = Decision::Double;
-                }
+                let (max_ex, mut decision) = get_max_expectation(&sol, &initial_hand, &rule);
                 print!("{} ", decision_to_char(decision));
             }
             println!();
