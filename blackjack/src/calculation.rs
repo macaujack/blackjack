@@ -106,9 +106,8 @@ fn memoization_find_solution(
         return;
     }
 
-    let current_sum = current_hand.get_sum();
     // Obvious case 1: Bust
-    if current_sum > 21 {
+    if current_hand.bust() {
         solution[current_hand] = MaxExpectation {
             stand: -1.0,
             ..Default::default()
@@ -117,28 +116,20 @@ fn memoization_find_solution(
     }
 
     // Obvious case 2: Charlie number reached.
-    if current_hand.get_total() >= rule.charlie_number as u16 {
+    if current_hand.get_total() == rule.charlie_number as u16 {
         solution[current_hand] = MaxExpectation {
             stand: 1.0,
-            ..Default::default()
-        }
-    }
-
-    let stand_odds = calculate_stand_odds(rule, current_hand, dealer_up_card, current_shoe);
-    // Obvious case 3: Current hard hand sum is 21. Stand!
-    if current_sum == 21 {
-        // Stand (obvious)
-        solution[current_hand] = MaxExpectation {
-            stand: stand_odds.win - stand_odds.lose,
             ..Default::default()
         };
         return;
     }
-    // Obvious case 4: Current soft hand sum is 21. Stand!
-    if current_hand.is_soft() && current_sum == 11 {
+
+    // Obvious case 3: Current actual sum is 21. Stand!
+    if current_hand.get_actual_sum() == 21 {
+        let stand_odds = calculate_stand_odds(rule, current_hand, dealer_up_card, current_shoe);
+
         let stand = {
-            if current_hand.get_total() == 2 {
-                // Blackjack! Congrats!
+            if current_hand.is_natural() {
                 stand_odds.win * rule.payout_blackjack - stand_odds.lose
             } else {
                 stand_odds.win - stand_odds.lose
@@ -156,9 +147,10 @@ fn memoization_find_solution(
         ..Default::default()
     };
 
-    // This is to avoid repeatedly check if the number of card is 2 in the following for-loop.
+    // This is to avoid repeatedly checking if the number of card is 2 in the following for-loop.
     let calculate_double_fn = {
         if current_hand.get_total() == 2 {
+            solution[current_hand].double = 0.0;
             |val: &mut f64, delta: f64| *val += delta
         } else {
             |_: &mut f64, _: f64| {}
@@ -299,6 +291,7 @@ fn memoization_find_win_lose_odds(
         return;
     }
     if dealer_sum >= 17 {
+        // Hard sum >= 17
         add_to_win_lose_cases_count(*player_sum, dealer_sum, &mut odds[dealer_extra_hand], 1.0);
         return;
     }
@@ -381,9 +374,8 @@ fn memoization_find_win_lose_odds(
         let next_state_odds = odds[dealer_extra_hand];
         dealer_extra_hand.remove_card(card);
 
-        odds[dealer_extra_hand] += &(next_state_odds
-            * (((original_shoe[card] - dealer_extra_hand[card]) as f64)
-                / current_valid_shoe_total));
+        let p = ((original_shoe[card] - dealer_extra_hand[card]) as f64) / current_valid_shoe_total;
+        odds[dealer_extra_hand] += &(next_state_odds * p);
     }
 }
 
