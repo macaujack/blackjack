@@ -21,7 +21,7 @@ const fn get_powers_of_base() -> [u64; 10] {
 
 /// This struct provide a convenient way to use CardCount as the index of the
 /// array.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct StateArray<T: Copy + Default> {
     data: HashMap<u64, T>,
 }

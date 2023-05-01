@@ -1,5 +1,5 @@
 use super::{Decision, PeekPolicy, Rule};
-use crate::{simulation::Card, CardCount, InitialSituation, StateArray};
+use crate::{CardCount, InitialSituation, StateArray};
 use std::{cmp::Ordering, ops};
 
 mod calculation_states;
@@ -8,38 +8,6 @@ mod calculation_states;
 pub struct MaxExpectation {
     pub hit: f64,
     pub stand: f64,
-    pub double: f64,
-}
-
-impl MaxExpectation {
-    pub fn get_max_expectation(&self, bust: bool, allow_late_surrender: bool) -> (f64, Decision) {
-        if bust {
-            return (-1.0, Decision::Stand);
-        }
-        let mut max_ex;
-        let mut decision;
-        if allow_late_surrender {
-            max_ex = -0.5;
-            decision = Decision::Surrender;
-        } else {
-            max_ex = -f64::INFINITY;
-            decision = Decision::PlaceHolder;
-        }
-        if max_ex < self.hit {
-            max_ex = self.hit;
-            decision = Decision::Hit;
-        }
-        if max_ex < self.stand {
-            max_ex = self.stand;
-            decision = Decision::Stand;
-        }
-        if max_ex < self.double {
-            max_ex = self.double;
-            decision = Decision::Double;
-        }
-
-        (max_ex, decision)
-    }
 }
 
 impl Default for MaxExpectation {
@@ -47,16 +15,50 @@ impl Default for MaxExpectation {
         MaxExpectation {
             hit: -f64::INFINITY,
             stand: -f64::INFINITY,
-            double: -f64::INFINITY,
         }
     }
 }
 
+pub fn get_max_expectation(
+    solution: &StateArray<MaxExpectation>,
+    state: &CardCount,
+    rule: &Rule,
+) -> (f64, Decision) {
+    if state.bust() {
+        return (-1.0, Decision::Stand);
+    }
+    if state.get_total() >= rule.charlie_number as u16 {
+        return (1.0, Decision::Stand);
+    }
+
+    let (mut max_ex, mut max_decision) = {
+        if rule.allow_late_surrender {
+            (-0.5, Decision::Surrender)
+        } else {
+            (-f64::INFINITY, Decision::PlaceHolder)
+        }
+    };
+
+    let ex = solution[state];
+    if max_ex < ex.stand {
+        max_ex = ex.stand;
+        max_decision = Decision::Stand;
+    }
+    if max_ex < ex.hit {
+        max_ex = ex.hit;
+        max_decision = Decision::Hit;
+    }
+
+    (max_ex, max_decision)
+}
+
+#[derive(Default)]
 pub struct SolutionForInitialSituation {
     /// Note that this doesn't take the following cases into consideration:
     /// 1. Split pairs
     /// 2. Buy insurance
     pub general_solution: StateArray<MaxExpectation>,
+    pub double_expectation: f64,
     pub split_expectation: f64,
 }
 
@@ -77,9 +79,20 @@ pub fn calculate_solution(
         &mut general_solution,
     );
 
+    let mut double_expectation = 0.0;
+    let current_hand = &mut initial_hand;
+    for i in 1..=10 {
+        current_hand.add_card(i);
+        let p = shoe.get_proportion(i);
+        double_expectation += p * general_solution[current_hand].stand;
+        current_hand.remove_card(i);
+    }
+    double_expectation *= 2.0;
+
     // TODO: Calculate the expectation when able to split.
     SolutionForInitialSituation {
         general_solution,
+        double_expectation,
         split_expectation: -6666.0,
     }
 }
@@ -139,7 +152,6 @@ fn memoization_find_solution(
 
     solution[current_hand] = MaxExpectation {
         hit: 0.0,
-        double: 0.0,
         ..Default::default()
     };
 
@@ -155,16 +167,13 @@ fn memoization_find_solution(
 
         memoization_find_solution(rule, dealer_up_card, current_shoe, current_hand, solution);
 
-        let (ex_max, _): (f64, _) = solution[current_hand]
-            .get_max_expectation(current_hand.bust(), rule.allow_late_surrender);
-        let ex_stand: f64 = solution[current_hand].stand;
+        let (ex_max, _): (f64, _) = get_max_expectation(solution, current_hand, rule);
 
         current_hand.remove_card(i);
         current_shoe.add_card(i);
 
-        let p = (current_shoe[i] as f64) / total_shoe_count;
+        let p = current_shoe.get_proportion(i);
         solution[current_hand].hit += p * ex_max;
-        solution[current_hand].double += p * 2.0 * ex_stand;
     }
 
     let stand_odds = calculate_stand_odds(rule, current_hand, dealer_up_card, current_shoe);
@@ -443,7 +452,7 @@ mod tests {
 
         println!("Hard:");
         for my_hand_total in 5..=18 {
-            for dealer_up_card in 1..=10 {
+            for dealer_up_card in [2, 3, 4, 5, 6, 7, 8, 9, 10, 1] {
                 let mut shoe = CardCount::new(&counts);
                 let hand_cards = {
                     if my_hand_total - 2 <= 10 {
@@ -466,8 +475,11 @@ mod tests {
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
-                let (_, decision) = sol.general_solution[&initial_hand]
-                    .get_max_expectation(false, rule.allow_late_surrender);
+                let (max_ex, mut decision) =
+                    get_max_expectation(&sol.general_solution, &initial_hand, &rule);
+                if max_ex < sol.double_expectation {
+                    decision = Decision::Double;
+                }
                 print!("{} ", decision_to_char(decision));
             }
             println!();
@@ -477,7 +489,7 @@ mod tests {
         println!("Soft:");
 
         for another_card in 2..=9 {
-            for dealer_up_card in 1..=10 {
+            for dealer_up_card in [2, 3, 4, 5, 6, 7, 8, 9, 10, 1] {
                 let mut shoe = CardCount::new(&counts);
                 let hand_cards = (1, another_card);
                 shoe.remove_card(hand_cards.0);
@@ -494,8 +506,11 @@ mod tests {
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
-                let (_, decision) = sol.general_solution[&initial_hand]
-                    .get_max_expectation(false, rule.allow_late_surrender);
+                let (max_ex, mut decision) =
+                    get_max_expectation(&sol.general_solution, &initial_hand, &rule);
+                if max_ex < sol.double_expectation {
+                    decision = Decision::Double;
+                }
                 print!("{} ", decision_to_char(decision));
             }
             println!();
