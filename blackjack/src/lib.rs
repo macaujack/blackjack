@@ -37,6 +37,9 @@ pub enum PeekPolicy {
     NoPeek,
 }
 
+/// Stands for the initial situation. Note that in our model, the dealer deals herself the upcard
+/// first, and then she deals 2 cards to player. This won't influence anything. And for this
+/// reason, the player's two hand cards can be 0, indicating they are unknown yet.
 #[derive(Clone, Copy, Debug)]
 pub struct InitialSituation {
     shoe: CardCount,
@@ -46,6 +49,12 @@ pub struct InitialSituation {
 
 impl InitialSituation {
     pub fn new(shoe: CardCount, hand: (u8, u8), dealer_up_card: u8) -> Self {
+        if dealer_up_card == 0 || dealer_up_card > 10 {
+            panic!("Invalid dealer up card! It must be in [1, 10]")
+        }
+        if hand.0 > 10 || hand.1 > 10 {
+            panic!("Invalid hand card! It must be in [0, 10]")
+        }
         InitialSituation {
             shoe,
             hand_cards: hand,

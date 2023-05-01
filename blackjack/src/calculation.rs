@@ -69,21 +69,25 @@ pub fn calculate_solution(
     rule: &Rule,
     initial_situation: &InitialSituation,
 ) -> StateArray<MaxExpectation> {
-    let mut general_solution = StateArray::new();
-    let mut initial_hand = CardCount::new(&[0; 10]);
-    initial_hand.add_card(initial_situation.hand_cards.0);
-    initial_hand.add_card(initial_situation.hand_cards.1);
+    let mut solution = StateArray::new();
+    let mut initial_hand = CardCount::with_number_of_decks(0);
+    if initial_situation.hand_cards.0 > 0 {
+        initial_hand.add_card(initial_situation.hand_cards.0);
+    }
+    if initial_situation.hand_cards.1 > 0 {
+        initial_hand.add_card(initial_situation.hand_cards.1);
+    }
     let mut shoe = initial_situation.shoe;
     memoization_find_solution(
         rule,
         &initial_situation.dealer_up_card,
         &mut shoe,
         &mut initial_hand,
-        &mut general_solution,
+        &mut solution,
     );
 
     // TODO: Calculate the expectation when able to split.
-    general_solution
+    solution
 }
 
 fn memoization_find_solution(
@@ -152,6 +156,15 @@ fn memoization_find_solution(
         ..Default::default()
     };
 
+    // This is to avoid repeatedly check if the number of card is 2 in the following for-loop.
+    let calculate_double_fn = {
+        if current_hand.get_total() == 2 {
+            |val: &mut f64, delta: f64| *val += delta
+        } else {
+            |_: &mut f64, _: f64| {}
+        }
+    };
+
     for i in 1..=10 {
         if current_shoe[i] == 0 {
             continue;
@@ -162,13 +175,15 @@ fn memoization_find_solution(
 
         memoization_find_solution(rule, dealer_up_card, current_shoe, current_hand, solution);
 
-        let (ex_max, _): (f64, _) = get_max_expectation(solution, current_hand, rule);
+        let (ex_max, _) = get_max_expectation(solution, current_hand, rule);
+        let ex_stand = solution[current_hand].stand;
 
         current_hand.remove_card(i);
         current_shoe.add_card(i);
 
         let p = current_shoe.get_proportion(i);
         solution[current_hand].hit += p * ex_max;
+        calculate_double_fn(&mut solution[current_hand].double, 2.0 * p * ex_stand);
     }
 
     solution[current_hand].stand = {
@@ -489,7 +504,7 @@ mod tests {
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
-                let (max_ex, mut decision) = get_max_expectation(&sol, &initial_hand, &rule);
+                let (_, decision) = get_max_expectation(&sol, &initial_hand, &rule);
                 print!("{} ", decision_to_char(decision));
             }
             println!();
@@ -516,7 +531,7 @@ mod tests {
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
-                let (max_ex, mut decision) = get_max_expectation(&sol, &initial_hand, &rule);
+                let (_, decision) = get_max_expectation(&sol, &initial_hand, &rule);
                 print!("{} ", decision_to_char(decision));
             }
             println!();
