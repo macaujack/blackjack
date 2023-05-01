@@ -123,8 +123,16 @@ fn memoization_find_solution(
         return;
     }
 
+    // Obvious case 2: Charlie number reached.
+    if current_hand.get_total() >= rule.charlie_number as u16 {
+        solution[current_hand] = MaxExpectation {
+            stand: 1.0,
+            ..Default::default()
+        }
+    }
+
     let stand_odds = calculate_stand_odds(rule, current_hand, dealer_up_card, current_shoe);
-    // Obvious case 2: Current hard hand sum is 21. Stand!
+    // Obvious case 3: Current hard hand sum is 21. Stand!
     if current_sum == 21 {
         // Stand (obvious)
         solution[current_hand] = MaxExpectation {
@@ -133,7 +141,7 @@ fn memoization_find_solution(
         };
         return;
     }
-    // Obvious case 3: Current soft hand sum is 21. Stand!
+    // Obvious case 4: Current soft hand sum is 21. Stand!
     if current_hand.is_soft() && current_sum == 11 {
         let stand = {
             if current_hand.get_total() == 2 {
@@ -155,8 +163,6 @@ fn memoization_find_solution(
         ..Default::default()
     };
 
-    let total_shoe_count = current_shoe.get_total() as f64;
-
     for i in 1..=10 {
         if current_shoe[i] == 0 {
             continue;
@@ -176,8 +182,18 @@ fn memoization_find_solution(
         solution[current_hand].hit += p * ex_max;
     }
 
-    let stand_odds = calculate_stand_odds(rule, current_hand, dealer_up_card, current_shoe);
-    solution[current_hand].stand = stand_odds.win - stand_odds.lose;
+    solution[current_hand].stand = {
+        // Optimization here. No need to calculate stand odds when player's hands is <= 11 and total number of cards != 3, because
+        // in this case, player should obviously hit.
+        // When total number of cards is 3, we still need to calculate stand odds, because the stand expectation is used to
+        // calculate double expectation.
+        if current_hand.get_actual_sum() <= 11 && current_hand.get_total() != 3 {
+            -f64::INFINITY
+        } else {
+            let stand_odds = calculate_stand_odds(rule, current_hand, dealer_up_card, current_shoe);
+            stand_odds.win - stand_odds.lose
+        }
+    };
 }
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -238,7 +254,7 @@ fn calculate_stand_odds(
 
     let mut odds = StateArray::new();
 
-    memoization_find_win_lose_cases_count(
+    memoization_find_win_lose_odds(
         rule,
         &player_sum,
         dealer_up_card,
@@ -253,7 +269,7 @@ fn calculate_stand_odds(
 /// Note that the callers of this function must ensure that if player_sum is 21, it must NOT be
 /// a natural Blackjack. Player natural Blackjack should be handled separately as a special
 /// case before recursively calling this function.
-fn memoization_find_win_lose_cases_count(
+fn memoization_find_win_lose_odds(
     // Input parameters
     rule: &Rule,
     player_sum: &u16,
@@ -293,7 +309,16 @@ fn memoization_find_win_lose_cases_count(
                 ..Default::default()
             };
             return;
-        } else if rule.dealer_hit_on_soft17 && dealer_sum + 10 > 17 && dealer_sum + 10 <= 21 {
+        }
+
+        let lower_bound = {
+            if rule.dealer_hit_on_soft17 {
+                18
+            } else {
+                17
+            }
+        };
+        if dealer_sum + 10 >= lower_bound && dealer_sum + 10 <= 21 {
             add_to_win_lose_cases_count(
                 *player_sum,
                 dealer_sum + 10,
@@ -304,6 +329,7 @@ fn memoization_find_win_lose_cases_count(
         }
     }
 
+    // Case 2: Dealer must hit.
     let (next_card_min, next_card_max, current_valid_shoe_total) = {
         if dealer_extra_hand.get_total() != 0 {
             (
@@ -334,14 +360,13 @@ fn memoization_find_win_lose_cases_count(
     };
     let current_valid_shoe_total = current_valid_shoe_total as f64;
 
-    // Case 2: Dealer must hit.
     for card in next_card_min..=next_card_max {
         if dealer_extra_hand[card] == original_shoe[card] {
             continue;
         }
 
         dealer_extra_hand.add_card(card);
-        memoization_find_win_lose_cases_count(
+        memoization_find_win_lose_odds(
             rule,
             player_sum,
             dealer_up_card,
@@ -382,11 +407,11 @@ mod tests {
             split_all_limits: 1,
             split_ace_limits: 1,
             double_policy: crate::DoublePolicy::AnyTwo,
-            dealer_hit_on_soft17: true,
-            allow_das: true,
-            allow_late_surrender: true,
-            peek_policy: crate::PeekPolicy::UpAceOrTen,
-            charlie_number: std::u8::MAX,
+            dealer_hit_on_soft17: false,
+            allow_das: false,
+            allow_late_surrender: false,
+            peek_policy: crate::PeekPolicy::UpAce,
+            charlie_number: 6,
 
             payout_blackjack: 1.5,
             payout_insurance: 0.0,
@@ -400,7 +425,7 @@ mod tests {
         let original_shoe = CardCount::new(&[0, 0, 1, 0, 0, 0, 1, 0, 0, 1]);
         let mut dealer_extra_hand = CardCount::new(&[0; 10]);
         let mut odds = StateArray::new();
-        memoization_find_win_lose_cases_count(
+        memoization_find_win_lose_odds(
             &rule,
             &18,
             &1,
