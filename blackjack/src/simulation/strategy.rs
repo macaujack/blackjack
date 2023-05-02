@@ -1,5 +1,7 @@
 use crate::{
-    calculation::{calculate_solution, get_max_expectation, MaxExpectation},
+    calculation::{
+        calculate_solution_with_known_dealer_up_card, get_max_expectation, MaxExpectation,
+    },
     CardCount, Decision, InitialSituation, Rule, StateArray,
 };
 
@@ -164,7 +166,7 @@ impl Strategy for DpStrategy {
     }
 
     fn init_with_initial_situation(&mut self, rule: &Rule, initial_situation: &InitialSituation) {
-        self.sol = calculate_solution(&self.rule, initial_situation);
+        self.sol = calculate_solution_with_known_dealer_up_card(&self.rule, initial_situation);
     }
 
     fn make_decision(

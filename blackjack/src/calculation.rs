@@ -62,10 +62,41 @@ pub fn get_max_expectation(
     (max_ex, max_decision)
 }
 
+/// Calculates the expectation under the situation where dealer gets each card.
+pub fn calculate_solution_with_unknown_dealer_up_card(
+    rule: &Rule,
+    shoe: &CardCount,
+) -> ([StateArray<MaxExpectation>; 10], f64) {
+    let mut solutions: [StateArray<MaxExpectation>; 10] = Default::default();
+
+    let mut initial_situation = InitialSituation::new(*shoe, (0, 0), 1);
+    for dealer_up_card in 1..=10 {
+        initial_situation.dealer_up_card = dealer_up_card;
+        initial_situation.shoe.remove_card(dealer_up_card);
+
+        solutions[(dealer_up_card - 1) as usize] =
+            calculate_solution_with_known_dealer_up_card(rule, &initial_situation);
+
+        initial_situation.shoe.add_card(dealer_up_card);
+    }
+
+    // Calculate expectation
+    let mut total_ex = 0.0;
+    let no_hand_state = CardCount::with_number_of_decks(0);
+    for i in 0..solutions.len() {
+        let p = shoe.get_proportion((i + 1) as u8);
+        let (ex, _) = get_max_expectation(&solutions[i], &no_hand_state, rule);
+
+        total_ex += p * ex;
+    }
+
+    (solutions, total_ex)
+}
+
 /// Note that this doesn't take the following cases into consideration:
 /// 1. Split pairs
 /// 2. Buy insurance
-pub fn calculate_solution(
+pub fn calculate_solution_with_known_dealer_up_card(
     rule: &Rule,
     initial_situation: &InitialSituation,
 ) -> StateArray<MaxExpectation> {
@@ -455,11 +486,50 @@ mod tests {
             dealer_up_card,
         };
 
-        let sol = calculate_solution(&rule, &initial_situation);
+        let sol = calculate_solution_with_known_dealer_up_card(&rule, &initial_situation);
         let mut initial_hand = CardCount::new(&[0; 10]);
         initial_hand.add_card(hand_cards.0);
         initial_hand.add_card(hand_cards.1);
         println!("{:#?}", sol[&initial_hand]);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_calculate_with_unknown_player_cards() {
+        let rule = get_typical_rule();
+        let mut shoe = CardCount::with_number_of_decks(8);
+        let dealer_up_card = 10;
+        shoe.remove_card(dealer_up_card);
+        let initial_situation = InitialSituation::new(shoe, (0, 0), dealer_up_card);
+
+        let time_start = std::time::SystemTime::now();
+        let solution = calculate_solution_with_known_dealer_up_card(&rule, &initial_situation);
+        let no_hand_state = CardCount::with_number_of_decks(0);
+        println!("{:#?}", solution[&no_hand_state]);
+        println!(
+            "{}s",
+            std::time::SystemTime::now()
+                .duration_since(time_start)
+                .unwrap()
+                .as_secs_f64()
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn test_calculate_with_unknown_dealer_up_card() {
+        let rule = get_typical_rule();
+        let shoe = CardCount::with_number_of_decks(8);
+        let time_start = std::time::SystemTime::now();
+        let (_, ex) = calculate_solution_with_unknown_dealer_up_card(&rule, &shoe);
+        println!("Expectation is {ex}");
+        println!(
+            "{}s",
+            std::time::SystemTime::now()
+                .duration_since(time_start)
+                .unwrap()
+                .as_secs_f64()
+        );
     }
 
     #[test]
@@ -492,7 +562,7 @@ mod tests {
                     dealer_up_card,
                 };
 
-                let sol = calculate_solution(&rule, &initial_situation);
+                let sol = calculate_solution_with_known_dealer_up_card(&rule, &initial_situation);
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
@@ -519,7 +589,7 @@ mod tests {
                     dealer_up_card,
                 };
 
-                let sol = calculate_solution(&rule, &initial_situation);
+                let sol = calculate_solution_with_known_dealer_up_card(&rule, &initial_situation);
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
