@@ -21,7 +21,7 @@ const fn get_powers_of_base() -> [u64; 10] {
 
 /// This struct provide a convenient way to use CardCount as the index of the
 /// array.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct StateArray<T: Copy + Default> {
     data: HashMap<u64, T>,
 }
@@ -135,10 +135,6 @@ impl CardCount {
         } else {
             self.sum
         }
-    }
-
-    pub fn get_proportion(&self, card_value: u8) -> f64 {
-        (self[card_value] as f64) / (self.total as f64)
     }
 
     fn propagate_counts(&mut self) {

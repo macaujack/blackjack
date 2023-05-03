@@ -1,6 +1,7 @@
 use crate::{
     calculation::{
-        calculate_solution_with_known_dealer_up_card, get_max_expectation, MaxExpectation,
+        calculate_solution_with_initial_situation, get_max_expectation, Expectation,
+        SolutionForInitialSituation,
     },
     CardCount, Decision, InitialSituation, Rule, StateArray,
 };
@@ -153,7 +154,7 @@ impl Strategy for BasicStrategy {
 }
 
 struct DpStrategy {
-    sol: StateArray<MaxExpectation>,
+    sol: SolutionForInitialSituation,
     rule: Rule,
 }
 
@@ -166,7 +167,7 @@ impl Strategy for DpStrategy {
     }
 
     fn init_with_initial_situation(&mut self, rule: &Rule, initial_situation: &InitialSituation) {
-        self.sol = calculate_solution_with_known_dealer_up_card(&self.rule, initial_situation);
+        self.sol = calculate_solution_with_initial_situation(&self.rule, initial_situation);
     }
 
     fn make_decision(
@@ -180,7 +181,7 @@ impl Strategy for DpStrategy {
             return Decision::Split;
         }
 
-        let (_, decision) = get_max_expectation(&self.sol, current_hand, rule);
+        let (_, decision) = get_max_expectation(&self.sol.ex_stand_hit, current_hand, rule);
         decision
     }
 }
