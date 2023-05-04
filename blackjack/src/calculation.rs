@@ -1,3 +1,5 @@
+use self::calculation_states::HandShoePair;
+
 use super::{Decision, PeekPolicy, Rule};
 use crate::{CardCount, InitialSituation, StateArray};
 use std::{cmp::Ordering, ops};
@@ -195,11 +197,25 @@ fn get_impossible_dealer_hole_card(rule: &Rule, dealer_up_card: u8) -> u8 {
     }
 }
 
+fn get_number_of_threads(number_of_threads: usize) -> usize {
+    if number_of_threads == 0 {
+        let ret = std::thread::available_parallelism();
+        match ret {
+            Ok(x) => x.get(),
+            Err(_) => 1,
+        }
+    } else {
+        number_of_threads
+    }
+}
+
 /// Calculates the expectation under the situation where dealer gets each card.
 pub fn calculate_solution_without_initial_situation(
+    number_of_threads: usize,
     rule: &Rule,
     shoe: &CardCount,
 ) -> SolutionForBettingPhase {
+    let number_of_threads = get_number_of_threads(number_of_threads);
     let mut solution: SolutionForBettingPhase = Default::default();
 
     let mut initial_situation = InitialSituation::new(*shoe, (1, 1), 1);
@@ -230,6 +246,7 @@ pub fn calculate_solution_without_initial_situation(
                 // Core logic
                 let p = combs as f64 / total_combs;
                 let ex_other = calculate_expectations(
+                    number_of_threads,
                     rule,
                     &initial_situation,
                     &mut solution.exs_stand_hit[idx10],
@@ -249,13 +266,20 @@ pub fn calculate_solution_without_initial_situation(
 
 /// Note that this function hasn't considered Split yet.
 pub fn calculate_solution_with_initial_situation(
+    number_of_threads: usize,
     rule: &Rule,
     initial_situation: &InitialSituation,
 ) -> SolutionForInitialSituation {
+    let number_of_threads = get_number_of_threads(number_of_threads);
     let mut ex_stand_hit = StateArray::new();
 
     // Calculate expectation of Stand and Hit.
-    let exs_other = calculate_expectations(rule, initial_situation, &mut ex_stand_hit);
+    let exs_other = calculate_expectations(
+        number_of_threads,
+        rule,
+        initial_situation,
+        &mut ex_stand_hit,
+    );
 
     // TODO: Calculate the expectation when able to split.
     SolutionForInitialSituation {
@@ -269,7 +293,10 @@ pub fn calculate_solution_with_initial_situation(
 
 // Updates the expectations of Stand and Hit in the input parameter ex_stand_hit.
 // Returns the expectations of other decisions in the return value.
+// If the given number_of_threads is 0, the function will use
+// std::thread::available_parallelism to get the threads.
 fn calculate_expectations(
+    number_of_threads: usize,
     rule: &Rule,
     initial_situation: &InitialSituation,
     ex_stand_hit: &mut StateArray<Expectation>,
@@ -282,14 +309,26 @@ fn calculate_expectations(
         get_impossible_dealer_hole_card(rule, initial_situation.dealer_up_card);
 
     // Calculate expectation of Stand and hit.
-    memoization_calculate_stand_hit_expectation(
-        rule,
-        &initial_situation.dealer_up_card,
-        &impossible_dealer_hole_card,
-        &mut shoe,
-        &mut initial_hand,
-        ex_stand_hit,
-    );
+    if number_of_threads <= 1 {
+        memoization_calculate_stand_hit_expectation(
+            rule,
+            &initial_situation.dealer_up_card,
+            &impossible_dealer_hole_card,
+            &mut shoe,
+            &mut initial_hand,
+            ex_stand_hit,
+        );
+    } else {
+        multithreading_calculate_stand_hit_expectation(
+            number_of_threads,
+            rule,
+            initial_situation.dealer_up_card,
+            impossible_dealer_hole_card,
+            &shoe,
+            &initial_hand,
+            ex_stand_hit,
+        );
+    }
 
     // Calculate expectation of Double.
     let ex_double = {
@@ -350,6 +389,139 @@ fn calculate_expectations(
         ex_split: -f64::INFINITY,
         ex_extra_insurance,
         ex_summary,
+    }
+}
+
+fn multithreading_calculate_stand_hit_expectation(
+    // Input parameters
+    number_of_threads: usize,
+    rule: &Rule,
+    dealer_up_card: u8,
+    impossible_dealer_hole_card: u8,
+
+    // Parameters to maintain current state
+    initial_shoe: &CardCount,
+    initial_hand: &CardCount,
+
+    // Output parameters
+    ex_stand_hit: &mut StateArray<Expectation>,
+) {
+    let feature_fn = |c: &'_ CardCount| c.get_total() as usize;
+    let mut valid_pairs = calculation_states::gather_hand_count_states(
+        initial_hand,
+        initial_shoe,
+        rule.charlie_number,
+        feature_fn,
+        ex_stand_hit,
+    );
+    let mut dispatched_hands: Vec<Vec<HandShoePair>> = Vec::with_capacity(number_of_threads);
+    for _ in 0..number_of_threads {
+        dispatched_hands.push(Vec::new());
+    }
+    let mut state_count = 0;
+    for pairs in &valid_pairs {
+        for pair in pairs {
+            // Obvious case 1: Bust
+            if pair.hand.bust() {
+                ex_stand_hit[&pair.hand] = Expectation {
+                    stand: -1.0,
+                    ..Default::default()
+                };
+                continue;
+            }
+
+            // Obvious case 2: Charlie number reached.
+            if pair.hand.get_total() == rule.charlie_number as u16 {
+                ex_stand_hit[&pair.hand] = Expectation {
+                    stand: 1.0,
+                    ..Default::default()
+                };
+                continue;
+            }
+
+            if pair.hand.get_actual_sum() <= 11 && pair.hand.get_total() != 3 {
+                ex_stand_hit[&pair.hand] = Expectation {
+                    stand: -f64::INFINITY,
+                    hit: 0.0,
+                };
+                continue;
+            }
+            ex_stand_hit[&pair.hand] = Expectation {
+                stand: 0.0,
+                hit: 0.0,
+            };
+
+            // Obvious case 3: Current actual sum is 21. Stand!
+            if pair.hand.get_actual_sum() == 21 {
+                ex_stand_hit[&pair.hand] = Expectation {
+                    stand: 0.0,
+                    ..Default::default()
+                };
+                // Don't continue here, because we want to calculate the expectation
+                // of Stand.
+            }
+            dispatched_hands[state_count % number_of_threads].push(*pair);
+            state_count += 1;
+        }
+    }
+
+    // Calculate expectation of Stand.
+    let mut threads = Vec::with_capacity(number_of_threads - 1);
+    let raw_ex_stand_hit = ex_stand_hit as *mut StateArray<Expectation> as usize;
+    for _ in 1..number_of_threads {
+        let pairs_for_thread = dispatched_hands.pop().unwrap();
+        let rule = *rule;
+        let thread = std::thread::spawn(move || {
+            for pair in &pairs_for_thread {
+                let stand_odds =
+                    calculate_stand_odds(&rule, &pair.hand, &dealer_up_card, &pair.shoe);
+                unsafe {
+                    // This is OK, since the threads are not modifying the same memory.
+                    let ex_stand_hit = &mut *(raw_ex_stand_hit as *mut StateArray<Expectation>);
+                    ex_stand_hit[&pair.hand].stand = {
+                        if pair.hand.is_natural() {
+                            stand_odds.win * rule.payout_blackjack - stand_odds.lose
+                        } else {
+                            stand_odds.win - stand_odds.lose
+                        }
+                    };
+                }
+            }
+        });
+        threads.push(thread);
+    }
+    for pair in dispatched_hands.first().unwrap() {
+        let stand_odds = calculate_stand_odds(&rule, &pair.hand, &dealer_up_card, &pair.shoe);
+        ex_stand_hit[&pair.hand].stand = {
+            if pair.hand.is_natural() {
+                stand_odds.win * rule.payout_blackjack - stand_odds.lose
+            } else {
+                stand_odds.win - stand_odds.lose
+            }
+        };
+    }
+    for thread in threads {
+        let _ = thread.join();
+    }
+
+    // Calculate expectation of Hit.
+    for pairs in valid_pairs.iter_mut().rev() {
+        for pair in pairs {
+            if ex_stand_hit[&pair.hand].hit != 0.0 {
+                continue;
+            }
+
+            for next_card in 1..=10 {
+                if pair.shoe[next_card] == 0 {
+                    continue;
+                }
+                pair.hand.add_card(next_card);
+                let (ex_max, _) = get_max_expectation(ex_stand_hit, &pair.hand, rule);
+                pair.hand.remove_card(next_card);
+                let p = get_card_probability(&pair.shoe, impossible_dealer_hole_card, next_card);
+                ex_stand_hit[&pair.hand].hit += p * ex_max;
+            }
+        }
     }
 }
 
@@ -716,7 +888,7 @@ mod tests {
             dealer_up_card,
         };
 
-        let sol = calculate_solution_with_initial_situation(&rule, &initial_situation);
+        let sol = calculate_solution_with_initial_situation(1, &rule, &initial_situation);
         let mut initial_hand = CardCount::new(&[0; 10]);
         initial_hand.add_card(hand_cards.0);
         initial_hand.add_card(hand_cards.1);
@@ -733,7 +905,7 @@ mod tests {
         let initial_situation = InitialSituation::new(shoe, (0, 0), dealer_up_card);
 
         let time_start = std::time::SystemTime::now();
-        let solution = calculate_solution_with_initial_situation(&rule, &initial_situation);
+        let solution = calculate_solution_with_initial_situation(1, &rule, &initial_situation);
         let no_hand_state = CardCount::with_number_of_decks(0);
         println!("{:#?}", solution.ex_stand_hit[&no_hand_state]);
         println!(
@@ -751,7 +923,7 @@ mod tests {
         let rule = get_typical_rule();
         let shoe = CardCount::with_number_of_decks(8);
         let time_start = std::time::SystemTime::now();
-        let sol = calculate_solution_without_initial_situation(&rule, &shoe);
+        let sol = calculate_solution_without_initial_situation(1, &rule, &shoe);
         println!("Expectation is {}", sol.ex_total_summary);
         println!(
             "{}s",
@@ -788,7 +960,7 @@ mod tests {
                     dealer_up_card,
                 };
 
-                let sol = calculate_solution_with_initial_situation(&rule, &initial_situation);
+                let sol = calculate_solution_with_initial_situation(1, &rule, &initial_situation);
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
@@ -823,7 +995,7 @@ mod tests {
                     dealer_up_card,
                 };
 
-                let sol = calculate_solution_with_initial_situation(&rule, &initial_situation);
+                let sol = calculate_solution_with_initial_situation(1, &rule, &initial_situation);
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
@@ -848,7 +1020,7 @@ mod tests {
         let rule = get_typical_rule();
         let shoe = CardCount::with_number_of_decks(rule.number_of_decks);
 
-        let sol = calculate_solution_without_initial_situation(&rule, &shoe);
+        let sol = calculate_solution_without_initial_situation(3, &rule, &shoe);
 
         println!("Hard:");
         for my_hand_total in 5..=18 {

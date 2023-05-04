@@ -167,7 +167,7 @@ impl Strategy for DpStrategy {
     }
 
     fn init_with_initial_situation(&mut self, rule: &Rule, initial_situation: &InitialSituation) {
-        self.sol = calculate_solution_with_initial_situation(&self.rule, initial_situation);
+        self.sol = calculate_solution_with_initial_situation(1, &self.rule, initial_situation);
     }
 
     fn make_decision(

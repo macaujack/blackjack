@@ -1,46 +1,59 @@
 use crate::{CardCount, StateArray};
 
-pub fn gather_hand_count_states<F, G>(
+#[derive(Debug, Clone, Copy)]
+pub struct HandShoePair {
+    pub hand: CardCount,
+    pub shoe: CardCount,
+}
+
+pub fn gather_hand_count_states<F, T: Copy + Default>(
+    initial_hand: &CardCount,
+    initial_shoe: &CardCount,
     charlie_number: u8,
-    feature_fn: F,
-    state_filter: G,
-) -> Vec<Vec<CardCount>>
+    mut feature_fn: F,
+    record: &StateArray<T>,
+) -> Vec<Vec<HandShoePair>>
 where
-    F: Fn(&CardCount) -> usize,
-    G: Fn(&CardCount) -> bool,
+    F: FnMut(&CardCount) -> usize,
 {
     let mut ret = Vec::new();
-    let mut card_count = CardCount::with_number_of_decks(0);
+    let mut hand = *initial_hand;
+    let mut shoe = *initial_shoe;
     gather_hand_count_states_aux(
         &charlie_number,
-        &feature_fn,
-        &state_filter,
-        &mut card_count,
+        &mut feature_fn,
+        record,
+        &mut hand,
+        &mut shoe,
         1,
         &mut ret,
     );
     ret
 }
 
-fn gather_hand_count_states_aux<F, G>(
+fn gather_hand_count_states_aux<F, T: Copy + Default>(
     charlie_number: &u8,
-    feature_fn: &F,
-    state_filter: &G,
+    feature_fn: &mut F,
+    record: &StateArray<T>,
     current_card_count: &mut CardCount,
+    current_shoe_count: &mut CardCount,
     loop_start_card: u8,
 
-    result: &mut Vec<Vec<CardCount>>,
+    result: &mut Vec<Vec<HandShoePair>>,
 ) where
-    F: Fn(&CardCount) -> usize,
-    G: Fn(&CardCount) -> bool,
+    F: FnMut(&CardCount) -> usize,
 {
-    if state_filter(current_card_count) {
-        let feature = feature_fn(current_card_count);
-        while result.len() <= feature {
-            result.push(vec![]);
-        }
-        result[feature].push(*current_card_count);
+    if record.contains_state(current_card_count) {
+        return;
     }
+    let feature = feature_fn(current_card_count);
+    while result.len() <= feature {
+        result.push(vec![]);
+    }
+    result[feature].push(HandShoePair {
+        hand: *current_card_count,
+        shoe: *current_shoe_count,
+    });
 
     if current_card_count.get_sum() >= 21
         || current_card_count.get_total() == *charlie_number as u16
@@ -49,32 +62,38 @@ fn gather_hand_count_states_aux<F, G>(
     }
 
     for i in loop_start_card..=10 {
+        if current_shoe_count[i] == 0 {
+            continue;
+        }
+        current_shoe_count.remove_card(i);
         current_card_count.add_card(i);
         gather_hand_count_states_aux(
             charlie_number,
             feature_fn,
-            state_filter,
+            record,
             current_card_count,
+            current_shoe_count,
             i,
             result,
         );
         current_card_count.remove_card(i);
+        current_shoe_count.add_card(i);
     }
 }
 
 pub fn gather_dealer_count_states<F>(
     dealer_hit_on_soft17: bool,
-    feature_fn: F,
+    mut feature_fn: F,
 ) -> Vec<Vec<CardCount>>
 where
-    F: Fn(&CardCount) -> usize,
+    F: FnMut(&CardCount) -> usize,
 {
     let mut ret = Vec::new();
     let mut card_count = CardCount::with_number_of_decks(0);
     let mut is_visited = StateArray::new();
     gather_dealer_count_states_aux(
         &dealer_hit_on_soft17,
-        &feature_fn,
+        &mut feature_fn,
         &mut card_count,
         &mut is_visited,
         &mut ret,
@@ -84,13 +103,13 @@ where
 
 fn gather_dealer_count_states_aux<F>(
     dealer_hit_on_soft17: &bool,
-    feature_fn: &F,
+    feature_fn: &mut F,
     current_card_count: &mut CardCount,
     is_visited: &mut StateArray<()>,
 
     result: &mut Vec<Vec<CardCount>>,
 ) where
-    F: Fn(&CardCount) -> usize,
+    F: FnMut(&CardCount) -> usize,
 {
     if is_visited.contains_state(current_card_count) {
         return;
@@ -145,8 +164,15 @@ mod tests {
     fn get_number_of_hand_states() {
         let charlie_number: u8 = 6;
         let f = |card_count: &CardCount| card_count.get_sum() as usize;
-        let g = |card_count: &CardCount| card_count.get_total() <= 6;
-        let gathered_states = gather_hand_count_states(charlie_number, f, g);
+        let initial_hand = CardCount::with_number_of_decks(0);
+        let initial_shoe = CardCount::with_number_of_decks(8);
+        let gathered_states = gather_hand_count_states(
+            &initial_hand,
+            &initial_shoe,
+            charlie_number,
+            f,
+            &StateArray::<()>::new(),
+        );
         let mut acc = 0;
         for (i, states) in gathered_states.iter().enumerate() {
             acc += states.len();
