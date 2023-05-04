@@ -3,4 +3,5 @@
 members = [
     "blackjack",
     "blackjack_drivers",
+    "blackjack_macros",
 ]

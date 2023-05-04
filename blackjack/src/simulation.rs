@@ -2,10 +2,12 @@ pub mod hand;
 pub mod shoe;
 pub mod strategy;
 
-use crate::{Decision, InitialSituation, Rule};
+use crate::Rule;
+use blackjack_macros::allowed_phase;
 use strum_macros::EnumIter;
 
 static FACE_VALUE_TO_BLACKJACK_VALUE: [u8; 13] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10];
+const MAX_PLAYER: u8 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, EnumIter)]
 pub enum Suit {
@@ -78,11 +80,10 @@ pub enum GamePhase {
     StartNewShoe,
 }
 
-pub struct Simulator<T: strategy::Strategy> {
+pub struct Simulator {
     rule: Rule,
     number_of_players: u8,
     seat_order: u8,
-    strategy: T,
 
     // Game state
     current_game_phase: GamePhase,
@@ -96,13 +97,12 @@ pub struct Simulator<T: strategy::Strategy> {
     current_hand: hand::Hand,
 }
 
-impl<T: strategy::Strategy> Simulator<T> {
+impl Simulator {
     pub fn new(rule: &Rule) -> Self {
         Self {
             rule: *rule,
             number_of_players: 0,
             seat_order: 0,
-            strategy: T::new(rule),
             current_game_phase: GamePhase::WaitForPlayerSeat,
             shoe: shoe::Shoe::new(rule.number_of_decks, rule.cut_card_proportion),
             dealer_up_card: Default::default(),
@@ -113,26 +113,62 @@ impl<T: strategy::Strategy> Simulator<T> {
         }
     }
 
-    pub fn init_with_initial_situation(&mut self) {
-        let cards = self.current_hand.get_cards(0);
-        let initial_situation = InitialSituation::new(
-            self.shoe.get_card_count(),
-            (cards[0].blackjack_value(), cards[1].blackjack_value()),
-            self.dealer_up_card.blackjack_value(),
-        );
-        self.strategy
-            .init_with_initial_situation(&self.rule, &initial_situation);
+    /// This will seat the player. Can be called at WaitForPlayerSeat phase.
+    /// Call this with two zeros to indicate not changing.
+    #[allowed_phase(WaitForPlayerSeat)]
+    pub fn seat_player(&mut self, number_of_players: u8, seat_order: u8) -> Result<(), String> {
+        if number_of_players > MAX_PLAYER {
+            return Err(format!("number_of_players cannot exceed {}", MAX_PLAYER));
+        }
+        if seat_order >= number_of_players {
+            return Err(format!("seat_order should be less than number_of_players"));
+        }
+        self.current_game_phase = GamePhase::PlaceBets;
+        if number_of_players == 0 && seat_order == 0 {
+            return Ok(());
+        }
+        self.number_of_players = number_of_players;
+        self.seat_order = seat_order;
+        Ok(())
     }
 
-    pub fn make_decision(&mut self) -> Decision {
-        self.strategy.make_decision(
-            &self.rule,
-            &self
-                .current_hand
-                .get_card_counts(self.current_playing_group_index),
-            self.current_split_all_times,
-            self.current_split_ace_times,
-        )
+    /// Can be called at PlaceBets phase.
+    /// Place 0 bet to indicate not to place any bet this time.
+    pub fn place_bets(&mut self, bet: u32) {
+        self.current_hand.set_original_bet(bet);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn get_typical_rule() -> Rule {
+        Rule {
+            number_of_decks: 8,
+            cut_card_proportion: 0.5,
+            split_all_limits: 1,
+            split_ace_limits: 1,
+            double_policy: crate::DoublePolicy::AnyTwo,
+            dealer_hit_on_soft17: false,
+            allow_das: false,
+            allow_late_surrender: false,
+            peek_policy: crate::PeekPolicy::UpAce,
+            charlie_number: 6,
+
+            payout_blackjack: 1.5,
+            payout_insurance: 3.0,
+        }
+    }
+
+    #[test]
+    fn test_allowed_phase() {
+        let rule = get_typical_rule();
+        let mut simulator = Simulator::new(&rule);
+        assert_eq!(simulator.current_game_phase, GamePhase::WaitForPlayerSeat);
+        assert!(simulator.seat_player(1, 0).is_ok());
+        assert_eq!(simulator.current_game_phase, GamePhase::PlaceBets);
+        assert!(simulator.seat_player(0, 0).is_err());
     }
 }
 

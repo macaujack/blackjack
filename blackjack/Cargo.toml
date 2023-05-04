@@ -11,3 +11,4 @@ serde = { version = "1", features = ["derive"] }
 serde-enum-str = "0.3"
 strum = { version = "0.24", features = ["derive"] }
 strum_macros = "0.24"
+blackjack_macros = { path = "../blackjack_macros" }

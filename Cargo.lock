@@ -67,6 +67,7 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 name = "blackjack"
 version = "0.1.0"
 dependencies = [
+ "blackjack_macros",
  "rand",
  "serde",
  "serde-enum-str",
@@ -83,6 +84,14 @@ dependencies = [
  "home",
  "serde",
  "serde_yaml",
+]
+
+[[package]]
+name = "blackjack_macros"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn 2.0.15",
 ]
 
 [[package]]
