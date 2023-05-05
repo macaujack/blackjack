@@ -1,13 +1,13 @@
 use crate::{
     calculation::{
-        calculate_solution_with_initial_situation, get_max_expectation, Expectation,
+        calculate_solution_without_initial_situation, get_max_expectation, SolutionForBettingPhase,
         SolutionForInitialSituation,
     },
-    CardCount, Decision, InitialSituation, Rule, StateArray,
+    CardCount, Decision, InitialSituation, Rule,
 };
 
 pub trait Strategy {
-    fn new(rule: &Rule) -> Self;
+    fn calculate_expectation_before_bet(&mut self, rule: &Rule, shoe: &CardCount) -> f64;
     fn init_with_initial_situation(&mut self, rule: &Rule, initial_situation: &InitialSituation);
     fn make_decision(
         &mut self,
@@ -18,6 +18,65 @@ pub trait Strategy {
     ) -> Decision;
 }
 
+#[derive(Debug, Default)]
+pub struct DpStrategySinglePlayer {
+    solution_large: SolutionForBettingPhase,
+    solution_small: SolutionForInitialSituation,
+    number_of_threads: usize,
+}
+
+impl DpStrategySinglePlayer {
+    pub fn new(number_of_threads: usize) -> Self {
+        let number_of_threads = {
+            if number_of_threads == 0 {
+                let parallelism = std::thread::available_parallelism();
+                match parallelism {
+                    Ok(n) => n.get(),
+                    Err(_) => 1,
+                }
+            } else {
+                number_of_threads
+            }
+        };
+        DpStrategySinglePlayer {
+            number_of_threads,
+            ..Default::default()
+        }
+    }
+}
+
+impl Strategy for DpStrategySinglePlayer {
+    fn calculate_expectation_before_bet(&mut self, rule: &Rule, shoe: &CardCount) -> f64 {
+        self.solution_large =
+            calculate_solution_without_initial_situation(self.number_of_threads, rule, shoe);
+        self.solution_large.get_total_expectation()
+    }
+
+    fn init_with_initial_situation(&mut self, _: &Rule, initial_situation: &InitialSituation) {
+        let solution_large = std::mem::take(&mut self.solution_large);
+        self.solution_small = solution_large.into_solution_for_initial_situation(
+            initial_situation.hand_cards,
+            initial_situation.dealer_up_card,
+        );
+    }
+
+    fn make_decision(
+        &mut self,
+        rule: &Rule,
+        current_hand: &CardCount,
+        current_split_all_times: u8,
+        current_split_ace_times: u8,
+    ) -> Decision {
+        if current_hand.get_total() == 2 && current_hand[1] == 2 {
+            return Decision::Split;
+        }
+
+        let (_, decision) =
+            get_max_expectation(&self.solution_small.ex_stand_hit, current_hand, rule);
+        decision
+    }
+}
+
 pub struct BasicStrategy {
     dealer_up_card: u8,
     hard_charts: [[(Decision, Decision); 10]; 14],
@@ -25,8 +84,8 @@ pub struct BasicStrategy {
     pair_charts: [[(Decision, Decision); 10]; 10],
 }
 
-impl Strategy for BasicStrategy {
-    fn new(rule: &Rule) -> BasicStrategy {
+impl BasicStrategy {
+    pub fn new(_rule: &Rule) -> BasicStrategy {
         // TODO: Improve this by calculating, instead of hard-coding.
 
         let mut strategy = BasicStrategy {
@@ -41,7 +100,7 @@ impl Strategy for BasicStrategy {
         const P: (Decision, Decision) = (Decision::Split, Decision::PlaceHolder);
         const DH: (Decision, Decision) = (Decision::Double, Decision::Hit);
         const DS: (Decision, Decision) = (Decision::Double, Decision::Stand);
-        const DP: (Decision, Decision) = (Decision::Double, Decision::Split);
+        const _DP: (Decision, Decision) = (Decision::Double, Decision::Split);
         const RH: (Decision, Decision) = (Decision::Surrender, Decision::Hit);
         const RS: (Decision, Decision) = (Decision::Surrender, Decision::Stand);
         const RP: (Decision, Decision) = (Decision::Surrender, Decision::Split);
@@ -88,8 +147,14 @@ impl Strategy for BasicStrategy {
 
         strategy
     }
+}
 
-    fn init_with_initial_situation(&mut self, rule: &Rule, initial_situation: &InitialSituation) {
+impl Strategy for BasicStrategy {
+    fn calculate_expectation_before_bet(&mut self, _: &Rule, _: &CardCount) -> f64 {
+        -0.006
+    }
+
+    fn init_with_initial_situation(&mut self, _: &Rule, initial_situation: &InitialSituation) {
         self.dealer_up_card = initial_situation.dealer_up_card;
     }
 
@@ -150,38 +215,5 @@ impl Strategy for BasicStrategy {
             }
             _ => decision.0,
         }
-    }
-}
-
-struct DpStrategy {
-    sol: SolutionForInitialSituation,
-    rule: Rule,
-}
-
-impl Strategy for DpStrategy {
-    fn new(rule: &Rule) -> Self {
-        DpStrategy {
-            sol: Default::default(),
-            rule: *rule,
-        }
-    }
-
-    fn init_with_initial_situation(&mut self, rule: &Rule, initial_situation: &InitialSituation) {
-        self.sol = calculate_solution_with_initial_situation(1, &self.rule, initial_situation);
-    }
-
-    fn make_decision(
-        &mut self,
-        rule: &Rule,
-        current_hand: &CardCount,
-        current_split_all_times: u8,
-        current_split_ace_times: u8,
-    ) -> Decision {
-        if current_hand.get_total() == 2 && current_hand[1] == 2 {
-            return Decision::Split;
-        }
-
-        let (_, decision) = get_max_expectation(&self.sol.ex_stand_hit, current_hand, rule);
-        decision
     }
 }

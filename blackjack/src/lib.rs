@@ -1,6 +1,7 @@
 pub mod calculation;
 pub mod simulation;
 mod statearray;
+pub mod strategy;
 
 use serde_enum_str::{Deserialize_enum_str, Serialize_enum_str};
 pub use statearray::CardCount;
