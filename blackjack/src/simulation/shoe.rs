@@ -98,8 +98,13 @@ impl Shoe {
         self.current_index >= self.cut_card_index
     }
 
-    pub fn get_card_count(&self) -> CardCount {
-        self.card_count
+    pub fn get_card_count(&self) -> &CardCount {
+        &self.card_count
+    }
+
+    pub fn preview_next_few_cards(&self, number: usize) -> &[Card] {
+        let rear = std::cmp::min(self.current_index + number, self.cards.len());
+        &self.cards[self.current_index..rear]
     }
 }
 

@@ -1,3 +1,5 @@
+mod simulation;
+
 use blackjack_drivers::parse_config_from_file;
 use clap::Parser;
 
@@ -27,5 +29,10 @@ fn main() {
     let args = args;
 
     let config = parse_config_from_file(&args.config);
-    println!("{:#?}", config);
+    let rule: blackjack::Rule = config.rule.try_into().unwrap();
+    let result = simulation::simulate_playing_forever(&rule, &config.blackjack_simulator);
+    match result {
+        Ok(_) => {}
+        Err(err_msg) => panic!("{}", err_msg),
+    };
 }

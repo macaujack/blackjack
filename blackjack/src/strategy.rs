@@ -9,6 +9,7 @@ use crate::{
 pub trait Strategy {
     fn calculate_expectation_before_bet(&mut self, rule: &Rule, shoe: &CardCount) -> f64;
     fn init_with_initial_situation(&mut self, rule: &Rule, initial_situation: &InitialSituation);
+    fn should_buy_insurance(&mut self, rule: &Rule, initial_situation: &InitialSituation) -> bool;
     fn make_decision(
         &mut self,
         rule: &Rule,
@@ -60,6 +61,10 @@ impl Strategy for DpStrategySinglePlayer {
         );
     }
 
+    fn should_buy_insurance(&mut self, rule: &Rule, _: &InitialSituation) -> bool {
+        self.solution_small.ex_extra_insurance > 0.0
+    }
+
     fn make_decision(
         &mut self,
         rule: &Rule,
@@ -67,12 +72,18 @@ impl Strategy for DpStrategySinglePlayer {
         current_split_all_times: u8,
         current_split_ace_times: u8,
     ) -> Decision {
-        if current_hand.get_total() == 2 && current_hand[1] == 2 {
-            return Decision::Split;
-        }
-
-        let (_, decision) =
+        let (mut mx_ex, mut decision) =
             get_max_expectation(&self.solution_small.ex_stand_hit, current_hand, rule);
+        if current_hand.get_total() == 2 {
+            if mx_ex < self.solution_small.ex_double {
+                mx_ex = self.solution_small.ex_double;
+                decision = Decision::Double;
+            }
+            if mx_ex < self.solution_small.ex_split {
+                mx_ex = self.solution_small.ex_split;
+                decision = Decision::Split;
+            }
+        }
         decision
     }
 }
@@ -156,6 +167,10 @@ impl Strategy for BasicStrategy {
 
     fn init_with_initial_situation(&mut self, _: &Rule, initial_situation: &InitialSituation) {
         self.dealer_up_card = initial_situation.dealer_up_card;
+    }
+
+    fn should_buy_insurance(&mut self, rule: &Rule, initial_situation: &InitialSituation) -> bool {
+        false
     }
 
     fn make_decision(

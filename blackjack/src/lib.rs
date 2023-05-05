@@ -61,7 +61,7 @@ impl InitialSituation {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Decision {
     PlaceHolder,
     Hit,

@@ -1,7 +1,7 @@
 pub mod hand;
 pub mod shoe;
 
-use crate::{CardCount, PeekPolicy, Rule};
+use crate::{CardCount, InitialSituation, PeekPolicy, Rule};
 use blackjack_macros::allowed_phase;
 use strum_macros::EnumIter;
 
@@ -35,6 +35,34 @@ impl Default for Card {
             face_value: 1,
             suit: Suit::Diamond,
         }
+    }
+}
+
+impl std::fmt::Display for Card {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let suit = match self.suit {
+            Suit::Diamond => 'D',
+            Suit::Club => 'C',
+            Suit::Heart => 'H',
+            Suit::Spade => 'S',
+        };
+        let value = match self.face_value {
+            1 => 'A',
+            2 => '2',
+            3 => '3',
+            4 => '4',
+            5 => '5',
+            6 => '6',
+            7 => '7',
+            8 => '8',
+            9 => '9',
+            10 => 'T',
+            11 => 'J',
+            12 => 'Q',
+            13 => 'K',
+            _ => panic!("Invalid card face value!"),
+        };
+        write!(f, "{}{}", suit, value)
     }
 }
 
@@ -103,12 +131,14 @@ pub struct Simulator {
 
 impl Simulator {
     pub fn new(rule: &Rule) -> Self {
+        let mut shoe = shoe::Shoe::new(rule.number_of_decks, rule.cut_card_proportion);
+        shoe.shuffle(0);
         Self {
             rule: *rule,
             number_of_players: 0,
             seat_order: 0,
             current_game_phase: GamePhase::WaitForPlayerSeat,
-            shoe: shoe::Shoe::new(rule.number_of_decks, rule.cut_card_proportion),
+            shoe,
             dealer_hand: hand::Hand::new(),
             insurance_bet: 0,
             current_split_all_times: 0,
@@ -166,8 +196,9 @@ impl Simulator {
 
     /// Can be called at DealInitialCards phase.
     /// Call this to deal initial cards to each player and dealer herself.
+    /// Returns InitialSituation.
     #[allowed_phase(DealInitialCards)]
-    pub fn deal_initial_cards(&mut self) -> Result<(), String> {
+    pub fn deal_initial_cards(&mut self) -> Result<InitialSituation, String> {
         for _ in 0..2 {
             for i in 0..self.number_of_players {
                 let card = self.shoe.deal_card().unwrap();
@@ -180,7 +211,18 @@ impl Simulator {
         }
 
         self.current_game_phase = GamePhase::DealerPeek;
-        Ok(())
+        let hand_cards = self.current_hand.get_cards(0);
+        let dealer_up_card = self.dealer_hand.get_cards(0)[0];
+
+        let initial_situation = InitialSituation::new(
+            *self.get_shoe_card_count(),
+            (
+                hand_cards[0].blackjack_value(),
+                hand_cards[1].blackjack_value(),
+            ),
+            dealer_up_card.blackjack_value(),
+        );
+        Ok(initial_situation)
     }
 
     /// Can be called at DealerPeek phase.
@@ -196,6 +238,9 @@ impl Simulator {
             PeekPolicy::NoPeek => false,
         };
         if !dealer_will_peek {
+            if buy_insurance {
+                return Err(format!("Cannot buy insurance when dealer doesn't peek!"));
+            }
             self.current_game_phase = GamePhase::WaitForRightPlayers;
             return Ok(false);
         }
@@ -207,8 +252,10 @@ impl Simulator {
         let hole = dealer_cards[1].blackjack_value();
         let dealer_is_natural = up + hole == 11;
         if dealer_is_natural {
+            self.insurance_bet += ((self.insurance_bet as f64) * self.rule.payout_insurance) as u32;
             self.current_game_phase = GamePhase::DealerPlayAndSummary;
         } else {
+            self.insurance_bet = 0;
             self.current_game_phase = GamePhase::WaitForRightPlayers;
         }
         Ok(dealer_is_natural)
@@ -405,7 +452,7 @@ impl Simulator {
         };
 
         self.current_game_phase = GamePhase::StartNewShoe;
-        let insurance_win = (self.insurance_bet as f64 * self.rule.payout_insurance) as u32;
+        let insurance_win = self.insurance_bet;
         Ok(main_win + insurance_win)
     }
 
@@ -416,13 +463,42 @@ impl Simulator {
         if self.shoe.reached_cut_card() {
             self.shoe.shuffle(0);
         }
-        self.current_game_phase = GamePhase::WaitForLeftPlayers;
+        self.current_game_phase = GamePhase::WaitForPlayerSeat;
         Ok(())
     }
 
     pub fn reached_split_time_limits(&self) -> bool {
         self.current_split_all_times == self.rule.split_all_limits
             || self.current_split_ace_times == self.rule.split_ace_limits
+    }
+
+    pub fn get_shoe_card_count(&self) -> &CardCount {
+        &self.shoe.get_card_count()
+    }
+
+    pub fn get_current_split_all_times(&self) -> u8 {
+        self.current_split_all_times
+    }
+
+    pub fn get_current_split_ace_times(&self) -> u8 {
+        self.current_split_ace_times
+    }
+
+    pub fn get_number_of_groups(&self) -> usize {
+        self.current_hand.get_number_of_groups()
+    }
+
+    pub fn get_my_current_card_count(&self) -> &CardCount {
+        self.current_hand
+            .get_card_counts(self.current_playing_group_index)
+    }
+
+    pub fn get_dealer_card_count(&self) -> &CardCount {
+        self.dealer_hand.get_card_counts(0)
+    }
+
+    pub fn preview_next_few_cards_in_shoe(&self, number: usize) -> &[Card] {
+        self.shoe.preview_next_few_cards(number)
     }
 
     fn receive_card_for_me(&mut self, card: Card) {
@@ -432,15 +508,6 @@ impl Simulator {
 
     fn receive_card_for_dealer(&mut self, card: Card) {
         self.dealer_hand.receive_card(0, card);
-    }
-
-    fn get_my_current_card_count(&self) -> &CardCount {
-        self.current_hand
-            .get_card_counts(self.current_playing_group_index)
-    }
-
-    fn get_dealer_card_count(&self) -> &CardCount {
-        self.dealer_hand.get_card_counts(0)
     }
 
     fn determine_winning(&mut self, multiplier: f64) {
@@ -484,7 +551,7 @@ mod tests {
             charlie_number: 6,
 
             payout_blackjack: 1.5,
-            payout_insurance: 3.0,
+            payout_insurance: 2.0,
         }
     }
 

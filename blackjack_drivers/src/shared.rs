@@ -25,8 +25,10 @@ pub struct ConfigRule {
     pub payout_insurance: f64,
 }
 
-impl Into<Result<blackjack::Rule, serde::de::value::Error>> for ConfigRule {
-    fn into(self) -> Result<blackjack::Rule, serde::de::value::Error> {
+impl TryInto<blackjack::Rule> for ConfigRule {
+    type Error = serde::de::value::Error;
+
+    fn try_into(self) -> Result<blackjack::Rule, Self::Error> {
         let blackjack_rule = blackjack::Rule {
             number_of_decks: self.number_of_decks,
             cut_card_proportion: self.cut_card_proportion,
@@ -47,7 +49,9 @@ impl Into<Result<blackjack::Rule, serde::de::value::Error>> for ConfigRule {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConfigBlackjackSimulator {}
+pub struct ConfigBlackjackSimulator {
+    pub number_of_threads: usize,
+}
 
 /// Reads the content of a given config file and parses it to a Config.
 ///
@@ -64,44 +68,39 @@ mod tests {
     fn get_typical_config_rule() -> ConfigRule {
         ConfigRule {
             number_of_decks: 8,
-            cut_card_proportion: 0.3333333,
+            cut_card_proportion: 0.5,
             split_all_limits: 1,
             split_ace_limits: 1,
             double_policy: String::from("AnyTwo"),
-            dealer_hit_on_soft17: true,
-            allow_das: true,
-            allow_late_surrender: true,
-            peek_policy: String::from("UpAceOrTen"),
-            charlie_number: std::u8::MAX,
+            dealer_hit_on_soft17: false,
+            allow_das: false,
+            allow_late_surrender: false,
+            peek_policy: String::from("UpAce"),
+            charlie_number: 6,
             payout_blackjack: 1.5,
-            payout_insurance: 0.0,
+            payout_insurance: 2.0,
         }
     }
 
     #[test]
     fn can_convert_rule() {
         let config_rule = get_typical_config_rule();
-        if let Ok(converted_rule) = config_rule.into() {
-            assert_eq!(converted_rule.number_of_decks, 8);
-            assert_eq!(converted_rule.cut_card_proportion, 0.3333333);
-            assert_eq!(
-                converted_rule.double_policy,
-                blackjack::DoublePolicy::AnyTwo
-            );
-            assert_eq!(
-                converted_rule.peek_policy,
-                blackjack::PeekPolicy::UpAceOrTen
-            );
-        } else {
-            panic!("Cannot convert!");
-        }
+        let converted_rule: blackjack::Rule = config_rule.try_into().unwrap();
+        assert_eq!(converted_rule.number_of_decks, 8);
+        assert_eq!(converted_rule.cut_card_proportion, 0.5);
+        assert_eq!(
+            converted_rule.double_policy,
+            blackjack::DoublePolicy::AnyTwo
+        );
+        assert_eq!(converted_rule.peek_policy, blackjack::PeekPolicy::UpAce);
     }
 
     #[test]
     fn should_return_error_when_converting_rule() {
         let mut config_rule = get_typical_config_rule();
         config_rule.double_policy = String::from("Not a policy");
-        let convert_result: Result<blackjack::Rule, serde::de::value::Error> = config_rule.into();
+        let convert_result: Result<blackjack::Rule, serde::de::value::Error> =
+            config_rule.try_into();
         assert!(convert_result.is_err());
     }
 }

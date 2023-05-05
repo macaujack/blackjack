@@ -843,7 +843,7 @@ mod tests {
             charlie_number: 6,
 
             payout_blackjack: 1.5,
-            payout_insurance: 3.0,
+            payout_insurance: 2.0,
         }
     }
 
