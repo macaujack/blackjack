@@ -13,6 +13,7 @@ impl Hand {
         let group_bet_pair = GroupBetPair {
             group: Group::new(),
             bet: 0,
+            win_already_determined: false,
         };
         Hand {
             group_bet_pairs: vec![group_bet_pair],
@@ -32,6 +33,7 @@ impl Hand {
         self.group_bet_pairs.push(GroupBetPair {
             group: new_group,
             bet: self.group_bet_pairs[group_index].bet,
+            win_already_determined: false,
         });
     }
 
@@ -52,12 +54,22 @@ impl Hand {
         self.group_bet_pairs[0].bet = bet;
     }
 
+    pub fn determine_winning(&mut self, group_index: usize, multiplier: f64) {
+        self.group_bet_pairs[group_index].win_already_determined = true;
+        let winning = (self.group_bet_pairs[group_index].bet as f64 * multiplier) as u32;
+        self.group_bet_pairs[group_index].bet = winning;
+    }
+
+    pub fn is_winning_already_determined(&self, group_index: usize) -> bool {
+        self.group_bet_pairs[group_index].win_already_determined
+    }
+
     pub fn get_cards(&self, group_index: usize) -> &Vec<Card> {
         &self.group_bet_pairs[group_index].group.cards
     }
 
-    pub fn get_card_counts(&self, group_index: usize) -> CardCount {
-        self.group_bet_pairs[group_index].group.card_count
+    pub fn get_card_counts(&self, group_index: usize) -> &CardCount {
+        &self.group_bet_pairs[group_index].group.card_count
     }
 
     /// Clears all the cards in all groups. Remove all the extra groups (i.e., groups
@@ -67,6 +79,8 @@ impl Hand {
             self.group_bet_pairs.pop();
         }
         self.group_bet_pairs[0].group.clear();
+        self.group_bet_pairs[0].bet = 0;
+        self.group_bet_pairs[0].win_already_determined = false;
     }
 }
 
@@ -105,6 +119,9 @@ impl Group {
 struct GroupBetPair {
     group: Group,
     bet: u32,
+    /// Indicate whether the winning money of this group has already been determined. This happens
+    /// when you bust, surrender or reach Charlie number.
+    win_already_determined: bool,
 }
 
 #[cfg(test)]

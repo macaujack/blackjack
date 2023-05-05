@@ -2,7 +2,7 @@ pub mod hand;
 pub mod shoe;
 pub mod strategy;
 
-use crate::Rule;
+use crate::{CardCount, PeekPolicy, Rule};
 use blackjack_macros::allowed_phase;
 use strum_macros::EnumIter;
 
@@ -75,11 +75,15 @@ pub enum GamePhase {
     DealInitialCards,
     DealerPeek,
     WaitForRightPlayers,
+    PlaySplit,
     Play,
     WaitForLeftPlayers,
+    DealerPlayAndSummary,
     StartNewShoe,
 }
 
+/// Simulates a Blackjack table. Note that there are some differences:
+/// 1. Even when you place no bet, you can still play.
 pub struct Simulator {
     rule: Rule,
     number_of_players: u8,
@@ -88,7 +92,8 @@ pub struct Simulator {
     // Game state
     current_game_phase: GamePhase,
     shoe: shoe::Shoe,
-    dealer_up_card: Card,
+    dealer_hand: hand::Hand,
+    insurance_bet: u32,
 
     // My playing state
     current_split_all_times: u8,
@@ -105,7 +110,8 @@ impl Simulator {
             seat_order: 0,
             current_game_phase: GamePhase::WaitForPlayerSeat,
             shoe: shoe::Shoe::new(rule.number_of_decks, rule.cut_card_proportion),
-            dealer_up_card: Default::default(),
+            dealer_hand: hand::Hand::new(),
+            insurance_bet: 0,
             current_split_all_times: 0,
             current_split_ace_times: 0,
             current_playing_group_index: 0,
@@ -123,7 +129,10 @@ impl Simulator {
         if seat_order >= number_of_players {
             return Err(format!("seat_order should be less than number_of_players"));
         }
+
         self.current_game_phase = GamePhase::PlaceBets;
+        self.new_game();
+
         if number_of_players == 0 && seat_order == 0 {
             return Ok(());
         }
@@ -134,8 +143,327 @@ impl Simulator {
 
     /// Can be called at PlaceBets phase.
     /// Place 0 bet to indicate not to place any bet this time.
-    pub fn place_bets(&mut self, bet: u32) {
+    #[allowed_phase(PlaceBets)]
+    pub fn place_bets(&mut self, bet: u32) -> Result<(), String> {
+        if (bet as f64 * self.rule.payout_blackjack).fract() != 0.0 {
+            return Err(format!(
+                "bet multiplied by payout_blackjack must be an integer"
+            ));
+        }
+        if bet % 2 != 0 {
+            return Err(format!(
+                "bet must be an even integer to possibly buy insurance"
+            ));
+        }
+        if ((bet / 2) as f64 * self.rule.payout_insurance).fract() != 0.0 {
+            return Err(format!(
+                "Half of bet multiplied by payout_insurance must be an integer"
+            ));
+        }
         self.current_hand.set_original_bet(bet);
+        self.current_game_phase = GamePhase::DealInitialCards;
+        Ok(())
+    }
+
+    /// Can be called at DealInitialCards phase.
+    /// Call this to deal initial cards to each player and dealer herself.
+    #[allowed_phase(DealInitialCards)]
+    pub fn deal_initial_cards(&mut self) -> Result<(), String> {
+        for _ in 0..2 {
+            for i in 0..self.number_of_players {
+                let card = self.shoe.deal_card().unwrap();
+                if i == self.seat_order {
+                    self.receive_card_for_me(card);
+                }
+            }
+            let card = self.shoe.deal_card().unwrap();
+            self.receive_card_for_dealer(card);
+        }
+
+        self.current_game_phase = GamePhase::DealerPeek;
+        Ok(())
+    }
+
+    /// Can be called at DealerPeek phase.
+    /// Call this to make dealer peeks her hole card if necessary.
+    /// Returns true if dealer does peek and gets a natural. Otherwise false.
+    #[allowed_phase(DealerPeek)]
+    pub fn dealer_peeks_if_necessary(&mut self, buy_insurance: bool) -> Result<bool, String> {
+        let dealer_cards = self.dealer_hand.get_cards(0);
+        let up = dealer_cards[0].blackjack_value();
+        let dealer_will_peek = match self.rule.peek_policy {
+            PeekPolicy::UpAceOrTen => up == 1 || up == 10,
+            PeekPolicy::UpAce => up == 1,
+            PeekPolicy::NoPeek => false,
+        };
+        if !dealer_will_peek {
+            self.current_game_phase = GamePhase::WaitForRightPlayers;
+            return Ok(false);
+        }
+
+        if buy_insurance {
+            self.insurance_bet = self.current_hand.get_bet(0) / 2;
+        }
+
+        let hole = dealer_cards[1].blackjack_value();
+        let dealer_is_natural = up + hole == 11;
+        if dealer_is_natural {
+            self.current_game_phase = GamePhase::DealerPlayAndSummary;
+        } else {
+            self.current_game_phase = GamePhase::WaitForRightPlayers;
+        }
+        Ok(dealer_is_natural)
+    }
+
+    /// Can be called at WaitForRightPlayers phase.
+    /// Call this to wait for players on your right.
+    #[allowed_phase(WaitForRightPlayers)]
+    pub fn wait_for_right_players(&mut self) -> Result<(), String> {
+        // Simply let them stand immediately.
+        self.current_game_phase = GamePhase::PlaySplit;
+        Ok(())
+    }
+
+    /// Can be called at PlaySplit phase.
+    /// Call this to play hand.
+    /// Returns true if you reach split times limit and cannot make more splits.
+    ///
+    /// Note that if you are splitting Aces, you cannot make other decisions.
+    #[allowed_phase(PlaySplit)]
+    pub fn play_split(&mut self, group_index: usize) -> Result<bool, String> {
+        if self.reached_split_time_limits() {
+            return Err(format!("You reached split time limits!"));
+        }
+        let cards = self.current_hand.get_cards(group_index);
+        if cards[0].blackjack_value() != cards[1].blackjack_value() {
+            return Err(format!("You cannot split two cards with different values!"));
+        }
+
+        self.current_split_all_times += 1;
+        if cards[0].blackjack_value() == 1 {
+            self.current_split_ace_times += 1;
+        }
+
+        self.current_hand.split_group(group_index);
+        let card = self.shoe.deal_card().unwrap();
+        self.current_hand.receive_card(group_index, card);
+        let card = self.shoe.deal_card().unwrap();
+        self.current_hand
+            .receive_card(self.current_hand.get_number_of_groups() - 1, card);
+
+        Ok(self.reached_split_time_limits())
+    }
+
+    /// Can be called at PlaySplit phase.
+    /// Call this stop Split and proceed to the next game phase.
+    ///
+    /// Note that if you just splitted Aces, you won't be able to make other decisions,
+    /// so the Play phase will be skipped.
+    #[allowed_phase(PlaySplit)]
+    pub fn stop_split(&mut self) -> Result<(), String> {
+        self.current_game_phase = {
+            if self.current_split_ace_times > 0 {
+                GamePhase::WaitForLeftPlayers
+            } else {
+                GamePhase::Play
+            }
+        };
+        Ok(())
+    }
+
+    /// Can be called at Play phase.
+    /// Returns true if cannot play current hand group any more.
+    #[allowed_phase(Play)]
+    pub fn play_stand(&mut self) -> Result<bool, String> {
+        self.move_to_next_group();
+        Ok(true)
+    }
+
+    /// Can be called at Play phase.
+    /// Returns true if cannot play current hand group any more.
+    #[allowed_phase(Play)]
+    pub fn play_hit(&mut self) -> Result<bool, String> {
+        let card = self.shoe.deal_card().unwrap();
+        self.receive_card_for_me(card);
+        let my_card_count = self.get_my_current_card_count();
+        if my_card_count.bust() {
+            self.determine_winning(0.0);
+            self.move_to_next_group();
+            return Ok(true);
+        }
+        if my_card_count.get_total() == self.rule.charlie_number as u16 {
+            self.determine_winning(2.0);
+            self.move_to_next_group();
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    /// Can be called at Play phase.
+    /// Returns true if cannot play current hand group any more.
+    #[allowed_phase(Play)]
+    pub fn play_double(&mut self) -> Result<bool, String> {
+        let my_card_count = self.get_my_current_card_count();
+        if my_card_count.get_total() != 2 {
+            return Err(format!("You can only double down on initial 2 cards"));
+        }
+        if self.current_hand.get_number_of_groups() > 1 && !self.rule.allow_das {
+            return Err(format!("DAS is not allowed"));
+        }
+
+        let card = self.shoe.deal_card().unwrap();
+        self.receive_card_for_me(card);
+        self.current_hand
+            .double_down(self.current_playing_group_index);
+        let my_card_count = self.get_my_current_card_count();
+        if my_card_count.bust() {
+            self.determine_winning(0.0);
+        }
+        self.move_to_next_group();
+        Ok(true)
+    }
+
+    /// Can be called at Play phase.
+    /// Returns true if cannot play current hand group any more.
+    #[allowed_phase(Play)]
+    pub fn play_surrender(&mut self) -> Result<bool, String> {
+        if !self.rule.allow_late_surrender {
+            return Err(format!("Surrender is not allowed!"));
+        }
+        self.determine_winning(0.5);
+        self.move_to_next_group();
+        Ok(true)
+    }
+
+    /// Can be called at WaitForLeftPlayers phase.
+    /// Call this to wait for players on your left.
+    #[allowed_phase(WaitForLeftPlayers)]
+    pub fn wait_for_left_players(&mut self) -> Result<(), String> {
+        // Simply let them stand immediately.
+        self.current_game_phase = GamePhase::DealerPlayAndSummary;
+        Ok(())
+    }
+
+    /// Can be called at DealerPlayAndSummary phase.
+    /// Call this to make dealer play according to game rule.
+    /// Returns the total money you win including all side bets.
+    /// Note that this is what you win, not your profit. For example,
+    /// you wager 10 dollars. If you win, you win 20. If you lose,
+    /// you win 0.
+    #[allowed_phase(DealerPlayAndSummary)]
+    pub fn dealer_plays_and_summary(&mut self) -> Result<u32, String> {
+        let main_win = loop {
+            let dealer_card_count = self.get_dealer_card_count();
+            let must_stand = {
+                let actual_sum = dealer_card_count.get_actual_sum();
+                let is_soft = dealer_card_count.is_soft();
+                if actual_sum > 17 {
+                    true
+                } else if actual_sum < 17 {
+                    false
+                } else {
+                    if !is_soft {
+                        true
+                    } else {
+                        !self.rule.dealer_hit_on_soft17
+                    }
+                }
+            };
+
+            if must_stand {
+                let mut total_win = 0;
+                for i in 0..self.current_hand.get_number_of_groups() {
+                    let my_card_count = self.current_hand.get_card_counts(i);
+                    let mut this_group_win = self.current_hand.get_bet(i);
+
+                    if self.current_hand.is_winning_already_determined(i) {
+                        this_group_win = self.current_hand.get_bet(i);
+                    } else if my_card_count.is_natural()
+                        && self.current_hand.get_number_of_groups() == 1
+                    {
+                        if !dealer_card_count.is_natural() {
+                            this_group_win +=
+                                (this_group_win as f64 * self.rule.payout_blackjack) as u32;
+                        }
+                    } else if dealer_card_count.bust() {
+                        this_group_win *= 2;
+                    } else if dealer_card_count.is_natural() {
+                        this_group_win = 0;
+                    } else if my_card_count.get_actual_sum() < dealer_card_count.get_actual_sum() {
+                        this_group_win = 0;
+                    } else if my_card_count.get_actual_sum() > dealer_card_count.get_actual_sum() {
+                        this_group_win *= 2;
+                    }
+                    total_win += this_group_win;
+                }
+
+                break total_win;
+            }
+
+            let card = self.shoe.deal_card().unwrap();
+            self.receive_card_for_dealer(card);
+        };
+
+        self.current_game_phase = GamePhase::StartNewShoe;
+        let insurance_win = (self.insurance_bet as f64 * self.rule.payout_insurance) as u32;
+        Ok(main_win + insurance_win)
+    }
+
+    /// Can be called at StartNewShoe phase.
+    /// Call this to use a new shoe for playing if cut card is reached.
+    #[allowed_phase(StartNewShoe)]
+    pub fn start_new_shoe_if_necessary(&mut self) -> Result<(), String> {
+        if self.shoe.reached_cut_card() {
+            self.shoe.shuffle(0);
+        }
+        self.current_game_phase = GamePhase::WaitForLeftPlayers;
+        Ok(())
+    }
+
+    pub fn reached_split_time_limits(&self) -> bool {
+        self.current_split_all_times == self.rule.split_all_limits
+            || self.current_split_ace_times == self.rule.split_ace_limits
+    }
+
+    fn receive_card_for_me(&mut self, card: Card) {
+        self.current_hand
+            .receive_card(self.current_playing_group_index, card);
+    }
+
+    fn receive_card_for_dealer(&mut self, card: Card) {
+        self.dealer_hand.receive_card(0, card);
+    }
+
+    fn get_my_current_card_count(&self) -> &CardCount {
+        self.current_hand
+            .get_card_counts(self.current_playing_group_index)
+    }
+
+    fn get_dealer_card_count(&self) -> &CardCount {
+        self.dealer_hand.get_card_counts(0)
+    }
+
+    fn determine_winning(&mut self, multiplier: f64) {
+        self.current_hand
+            .determine_winning(self.current_playing_group_index, multiplier);
+    }
+
+    /// Move current playing group to the next group. If no more group, the game phase will proceed.
+    fn move_to_next_group(&mut self) {
+        self.current_playing_group_index += 1;
+        if self.current_playing_group_index == self.current_hand.get_number_of_groups() {
+            self.current_game_phase = GamePhase::WaitForLeftPlayers;
+        }
+    }
+
+    fn new_game(&mut self) {
+        self.dealer_hand.clear();
+        self.current_split_all_times = 0;
+        self.current_split_ace_times = 0;
+        self.current_playing_group_index = 0;
+        self.current_hand.clear();
+        self.insurance_bet = 0;
     }
 }
 
