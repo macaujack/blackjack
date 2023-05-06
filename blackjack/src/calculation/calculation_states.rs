@@ -1,6 +1,6 @@
 use crate::{CardCount, StateArray};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct HandShoePair {
     pub hand: CardCount,
     pub shoe: CardCount,
@@ -17,8 +17,8 @@ where
     F: FnMut(&CardCount) -> usize,
 {
     let mut ret = Vec::new();
-    let mut hand = *initial_hand;
-    let mut shoe = *initial_shoe;
+    let mut hand = initial_hand.clone();
+    let mut shoe = initial_shoe.clone();
     gather_hand_count_states_aux(
         &charlie_number,
         &mut feature_fn,
@@ -51,8 +51,8 @@ fn gather_hand_count_states_aux<F, T: Copy + Default>(
         result.push(vec![]);
     }
     result[feature].push(HandShoePair {
-        hand: *current_card_count,
-        shoe: *current_shoe_count,
+        hand: current_card_count.clone(),
+        shoe: current_shoe_count.clone(),
     });
 
     if current_card_count.get_sum() >= 21
@@ -120,7 +120,7 @@ fn gather_dealer_count_states_aux<F>(
     while result.len() <= feature {
         result.push(vec![]);
     }
-    result[feature].push(*current_card_count);
+    result[feature].push(current_card_count.clone());
 
     let must_stand = {
         let actual_sum = current_card_count.get_actual_sum();

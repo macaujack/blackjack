@@ -218,7 +218,7 @@ pub fn calculate_solution_without_initial_situation(
     let number_of_threads = get_number_of_threads(number_of_threads);
     let mut solution: SolutionForBettingPhase = Default::default();
 
-    let mut initial_situation = InitialSituation::new(*shoe, (1, 1), 1);
+    let mut initial_situation = InitialSituation::new(shoe.clone(), (1, 1), 1);
     let total_combs = rule.number_of_decks as u32 * 52;
     let total_combs = total_combs * (total_combs - 1) * (total_combs - 2);
     let total_combs = total_combs as f64;
@@ -304,7 +304,7 @@ fn calculate_expectations(
     let mut initial_hand = CardCount::with_number_of_decks(0);
     initial_hand.add_card(initial_situation.hand_cards.0);
     initial_hand.add_card(initial_situation.hand_cards.1);
-    let mut shoe = initial_situation.shoe;
+    let mut shoe = initial_situation.shoe.clone();
     let impossible_dealer_hole_card =
         get_impossible_dealer_hole_card(rule, initial_situation.dealer_up_card);
 
@@ -460,7 +460,7 @@ fn multithreading_calculate_stand_hit_expectation(
                 // Don't continue here, because we want to calculate the expectation
                 // of Stand.
             }
-            dispatched_hands[state_count % number_of_threads].push(*pair);
+            dispatched_hands[state_count % number_of_threads].push(pair.clone());
             state_count += 1;
         }
     }
@@ -955,7 +955,7 @@ mod tests {
                 shoe.remove_card(dealer_up_card);
 
                 let initial_situation = InitialSituation {
-                    shoe,
+                    shoe: shoe.clone(),
                     hand_cards,
                     dealer_up_card,
                 };
@@ -990,7 +990,7 @@ mod tests {
                 shoe.remove_card(dealer_up_card);
 
                 let initial_situation = InitialSituation {
-                    shoe,
+                    shoe: shoe.clone(),
                     hand_cards,
                     dealer_up_card,
                 };

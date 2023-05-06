@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::ops::{Index, IndexMut, SubAssign};
+use std::ops::{AddAssign, Index, IndexMut, SubAssign};
 
 const MOD: u64 = 1000000007;
 const BASE: u64 = 211;
@@ -55,7 +55,7 @@ impl<T: Copy + Default> IndexMut<&CardCount> for StateArray<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct CardCount {
     counts: [u16; 10],
     hash_value: u64,
@@ -140,6 +140,7 @@ impl CardCount {
     fn propagate_counts(&mut self) {
         self.hash_value = 0;
         self.sum = 0;
+        self.total = 0;
         for i in 0..self.counts.len() {
             self.hash_value += (self.counts[i] as u64) * POW_BASE[i];
             self.sum += ((i + 1) as u16) * self.counts[i];
@@ -159,6 +160,16 @@ impl SubAssign<&CardCount> for CardCount {
     }
 }
 
+impl AddAssign<&CardCount> for CardCount {
+    fn add_assign(&mut self, rhs: &CardCount) {
+        for i in 0..self.counts.len() {
+            self.counts[i] += rhs.counts[i];
+        }
+
+        self.propagate_counts();
+    }
+}
+
 impl Index<u8> for CardCount {
     type Output = u16;
     fn index(&self, index: u8) -> &Self::Output {
@@ -169,6 +180,12 @@ impl Index<u8> for CardCount {
 impl Hash for CardCount {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         state.write_u64(self.hash_value);
+    }
+}
+
+impl PartialEq for CardCount {
+    fn eq(&self, other: &Self) -> bool {
+        return self.hash_value == other.hash_value;
     }
 }
 
@@ -246,5 +263,21 @@ mod tests {
             cc2.remove_card(3);
             assert_eq!(sa[&cc2], 666);
         }
+    }
+
+    #[test]
+    fn test_card_count_add_sub_assign() {
+        let mut cc1 = CardCount::new(&[1, 2, 3, 0, 0, 0, 0, 0, 5, 6]);
+        let original_hash_value = cc1.hash_value;
+        assert_eq!(cc1.get_total(), 17);
+        assert_eq!(cc1.get_sum(), 119);
+        let cc2 = CardCount::new(&[10, 10, 10, 0, 6, 0, 0, 0, 20, 20]);
+        cc1 += &cc2;
+        assert_eq!(cc1.get_total(), 17 + cc2.get_total());
+        assert_eq!(cc1.get_sum(), 119 + cc2.get_sum());
+        cc1 -= &cc2;
+        assert_eq!(cc1.get_total(), 17);
+        assert_eq!(cc1.get_sum(), 119);
+        assert_eq!(cc1.hash_value, original_hash_value);
     }
 }

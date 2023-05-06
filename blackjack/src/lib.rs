@@ -38,7 +38,7 @@ pub enum PeekPolicy {
     NoPeek,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct InitialSituation {
     shoe: CardCount,
     hand_cards: (u8, u8),

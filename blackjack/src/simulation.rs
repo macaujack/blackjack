@@ -215,7 +215,7 @@ impl Simulator {
         let dealer_up_card = self.dealer_hand.get_cards(0)[0];
 
         let initial_situation = InitialSituation::new(
-            *self.get_shoe_card_count(),
+            self.get_shoe_card_count().clone(),
             (
                 hand_cards[0].blackjack_value(),
                 hand_cards[1].blackjack_value(),
