@@ -1,7 +1,7 @@
 use self::calculation_states::HandShoePair;
 
 use super::{Decision, PeekPolicy, Rule};
-use crate::{CardCount, InitialSituation, StateArray};
+use crate::{CardCount, InitialSituation, SingleStateArray};
 use std::{cmp::Ordering, ops};
 
 mod calculation_states;
@@ -22,7 +22,7 @@ impl Default for Expectation {
 }
 
 pub fn get_max_expectation(
-    solution: &StateArray<Expectation>,
+    solution: &SingleStateArray<Expectation>,
     state: &CardCount,
     rule: &Rule,
 ) -> (f64, Decision) {
@@ -56,7 +56,7 @@ pub fn get_max_expectation(
 
 #[derive(Debug, Default)]
 pub struct SolutionForInitialSituation {
-    pub ex_stand_hit: StateArray<Expectation>,
+    pub ex_stand_hit: SingleStateArray<Expectation>,
     pub ex_double: f64,
     pub ex_split: f64,
 
@@ -99,7 +99,7 @@ static PREFIX_SUM: [usize; 10] = get_prefix_sum();
 
 #[derive(Debug)]
 pub struct SolutionForBettingPhase {
-    exs_stand_hit: [StateArray<Expectation>; 10],
+    exs_stand_hit: [SingleStateArray<Expectation>; 10],
     exs_other_decisions: [[ExsOtherDecisions; 55]; 10],
     ex_total_summary: f64,
 }
@@ -271,7 +271,7 @@ pub fn calculate_solution_with_initial_situation(
     initial_situation: &InitialSituation,
 ) -> SolutionForInitialSituation {
     let number_of_threads = get_number_of_threads(number_of_threads);
-    let mut ex_stand_hit = StateArray::new();
+    let mut ex_stand_hit = SingleStateArray::new();
 
     // Calculate expectation of Stand and Hit.
     let exs_other = calculate_expectations(
@@ -299,7 +299,7 @@ fn calculate_expectations(
     number_of_threads: usize,
     rule: &Rule,
     initial_situation: &InitialSituation,
-    ex_stand_hit: &mut StateArray<Expectation>,
+    ex_stand_hit: &mut SingleStateArray<Expectation>,
 ) -> ExsOtherDecisions {
     let mut initial_hand = CardCount::with_number_of_decks(0);
     initial_hand.add_card(initial_situation.hand_cards.0);
@@ -404,7 +404,7 @@ fn multithreading_calculate_stand_hit_expectation(
     initial_hand: &CardCount,
 
     // Output parameters
-    ex_stand_hit: &mut StateArray<Expectation>,
+    ex_stand_hit: &mut SingleStateArray<Expectation>,
 ) {
     let feature_fn = |c: &'_ CardCount| c.get_total() as usize;
     let mut valid_pairs = calculation_states::gather_hand_count_states(
@@ -467,7 +467,7 @@ fn multithreading_calculate_stand_hit_expectation(
 
     // Calculate expectation of Stand.
     let mut threads = Vec::with_capacity(number_of_threads - 1);
-    let raw_ex_stand_hit = ex_stand_hit as *mut StateArray<Expectation> as usize;
+    let raw_ex_stand_hit = ex_stand_hit as *mut SingleStateArray<Expectation> as usize;
     for _ in 1..number_of_threads {
         let pairs_for_thread = dispatched_hands.pop().unwrap();
         let rule = *rule;
@@ -477,7 +477,8 @@ fn multithreading_calculate_stand_hit_expectation(
                     calculate_stand_odds(&rule, &pair.hand, &dealer_up_card, &pair.shoe);
                 unsafe {
                     // This is OK, since the threads are not modifying the same memory.
-                    let ex_stand_hit = &mut *(raw_ex_stand_hit as *mut StateArray<Expectation>);
+                    let ex_stand_hit =
+                        &mut *(raw_ex_stand_hit as *mut SingleStateArray<Expectation>);
                     ex_stand_hit[&pair.hand].stand = {
                         if pair.hand.is_natural() {
                             stand_odds.win * rule.payout_blackjack - stand_odds.lose
@@ -536,7 +537,7 @@ fn memoization_calculate_stand_hit_expectation(
     current_hand: &mut CardCount,
 
     // Output parameters
-    ex_stand_hit: &mut StateArray<Expectation>,
+    ex_stand_hit: &mut SingleStateArray<Expectation>,
 ) {
     if ex_stand_hit.contains_state(current_hand) {
         return;
@@ -681,7 +682,7 @@ fn calculate_stand_odds(
         };
     }
 
-    let mut odds = StateArray::new();
+    let mut odds = SingleStateArray::new();
 
     memoization_find_win_lose_odds(
         rule,
@@ -707,7 +708,7 @@ fn memoization_find_win_lose_odds(
 
     // Parameters to maintain current state
     dealer_extra_hand: &mut CardCount, // Dealer's hand except for the up card
-    odds: &mut StateArray<WinLoseCasesOdds>,
+    odds: &mut SingleStateArray<WinLoseCasesOdds>,
 ) {
     if odds.contains_state(dealer_extra_hand) {
         return;
@@ -853,7 +854,7 @@ mod tests {
         let rule = get_typical_rule();
         let original_shoe = CardCount::new(&[0, 0, 1, 0, 0, 0, 1, 0, 0, 1]);
         let mut dealer_extra_hand = CardCount::new(&[0; 10]);
-        let mut odds = StateArray::new();
+        let mut odds = SingleStateArray::new();
         memoization_find_win_lose_odds(
             &rule,
             &18,

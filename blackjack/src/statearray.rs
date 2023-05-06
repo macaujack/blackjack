@@ -22,13 +22,13 @@ const fn get_powers_of_base() -> [u64; 10] {
 /// This struct provide a convenient way to use CardCount as the index of the
 /// array.
 #[derive(Debug, Default, Clone)]
-pub struct StateArray<T: Copy + Default> {
+pub struct SingleStateArray<T: Copy + Default> {
     data: HashMap<u64, T>,
 }
 
-impl<T: Copy + Default> StateArray<T> {
-    pub fn new() -> StateArray<T> {
-        StateArray {
+impl<T: Copy + Default> SingleStateArray<T> {
+    pub fn new() -> SingleStateArray<T> {
+        SingleStateArray {
             data: HashMap::new(),
         }
     }
@@ -36,22 +36,69 @@ impl<T: Copy + Default> StateArray<T> {
     pub fn contains_state(&self, index: &CardCount) -> bool {
         self.data.contains_key(&index.hash_value)
     }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
 }
 
-impl<T: Copy + Default> Index<&CardCount> for StateArray<T> {
+impl<T: Copy + Default> Index<&CardCount> for SingleStateArray<T> {
     type Output = T;
     fn index(&self, index: &CardCount) -> &Self::Output {
         &self.data[&index.hash_value]
     }
 }
 
-impl<T: Copy + Default> IndexMut<&CardCount> for StateArray<T> {
+impl<T: Copy + Default> IndexMut<&CardCount> for SingleStateArray<T> {
     fn index_mut(&mut self, index: &CardCount) -> &mut Self::Output {
         if !self.data.contains_key(&index.hash_value) {
             self.data.insert(index.hash_value, Default::default());
         }
 
         self.data.get_mut(&index.hash_value).unwrap()
+    }
+}
+
+/// This struct provide a convenient way to use 2 CardCount structs as the index of the
+/// array.
+#[derive(Debug, Default, Clone)]
+pub struct DoubleStateArray<T: Copy + Default> {
+    data: HashMap<u64, T>,
+}
+
+impl<T: Copy + Default> DoubleStateArray<T> {
+    pub fn new() -> DoubleStateArray<T> {
+        DoubleStateArray {
+            data: HashMap::new(),
+        }
+    }
+
+    pub fn contains_state(&self, index: DoubleCardCount) -> bool {
+        let hash = index.0.hash_value | (index.1.hash_value << 32);
+        self.data.contains_key(&hash)
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+}
+
+impl<T: Copy + Default> Index<DoubleCardCount<'_>> for DoubleStateArray<T> {
+    type Output = T;
+    fn index(&self, index: DoubleCardCount) -> &Self::Output {
+        let hash = index.0.hash_value | (index.1.hash_value << 32);
+        &self.data[&hash]
+    }
+}
+
+impl<T: Copy + Default> IndexMut<DoubleCardCount<'_>> for DoubleStateArray<T> {
+    fn index_mut(&mut self, index: DoubleCardCount) -> &mut Self::Output {
+        let hash = index.0.hash_value | (index.1.hash_value << 32);
+        if !self.data.contains_key(&hash) {
+            self.data.insert(hash, Default::default());
+        }
+
+        self.data.get_mut(&hash).unwrap()
     }
 }
 
@@ -156,7 +203,9 @@ impl SubAssign<&CardCount> for CardCount {
             self.counts[i] -= rhs.counts[i];
         }
 
-        self.propagate_counts();
+        self.hash_value = (self.hash_value + MOD - rhs.hash_value) % MOD;
+        self.total -= rhs.total;
+        self.sum -= rhs.sum;
     }
 }
 
@@ -166,7 +215,9 @@ impl AddAssign<&CardCount> for CardCount {
             self.counts[i] += rhs.counts[i];
         }
 
-        self.propagate_counts();
+        self.hash_value = (self.hash_value + rhs.hash_value) % MOD;
+        self.total += rhs.total;
+        self.sum += rhs.sum;
     }
 }
 
@@ -188,6 +239,8 @@ impl PartialEq for CardCount {
         return self.hash_value == other.hash_value;
     }
 }
+
+pub type DoubleCardCount<'a> = (&'a CardCount, &'a CardCount);
 
 #[cfg(test)]
 mod tests {
@@ -251,7 +304,7 @@ mod tests {
             raw_counts[3] = 2;
             let raw_counts: [u16; 10] = raw_counts;
 
-            let mut sa: StateArray<i32> = StateArray::new();
+            let mut sa: SingleStateArray<i32> = SingleStateArray::new();
             let mut cc1 = CardCount::new(&raw_counts);
             sa[&cc1] = 666;
             cc1.add_card(3);
@@ -273,6 +326,7 @@ mod tests {
         assert_eq!(cc1.get_sum(), 119);
         let cc2 = CardCount::new(&[10, 10, 10, 0, 6, 0, 0, 0, 20, 20]);
         cc1 += &cc2;
+        assert_eq!(cc1.hash_value, horner_method(&cc1.counts));
         assert_eq!(cc1.get_total(), 17 + cc2.get_total());
         assert_eq!(cc1.get_sum(), 119 + cc2.get_sum());
         cc1 -= &cc2;

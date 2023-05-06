@@ -1,4 +1,4 @@
-use crate::{CardCount, StateArray};
+use crate::{CardCount, SingleStateArray};
 
 #[derive(Debug, Clone)]
 pub struct HandShoePair {
@@ -11,7 +11,7 @@ pub fn gather_hand_count_states<F, T: Copy + Default>(
     initial_shoe: &CardCount,
     charlie_number: u8,
     mut feature_fn: F,
-    record: &StateArray<T>,
+    record: &SingleStateArray<T>,
 ) -> Vec<Vec<HandShoePair>>
 where
     F: FnMut(&CardCount) -> usize,
@@ -34,7 +34,7 @@ where
 fn gather_hand_count_states_aux<F, T: Copy + Default>(
     charlie_number: &u8,
     feature_fn: &mut F,
-    record: &StateArray<T>,
+    record: &SingleStateArray<T>,
     current_card_count: &mut CardCount,
     current_shoe_count: &mut CardCount,
     loop_start_card: u8,
@@ -90,7 +90,7 @@ where
 {
     let mut ret = Vec::new();
     let mut card_count = CardCount::with_number_of_decks(0);
-    let mut is_visited = StateArray::new();
+    let mut is_visited = SingleStateArray::new();
     gather_dealer_count_states_aux(
         &dealer_hit_on_soft17,
         &mut feature_fn,
@@ -105,7 +105,7 @@ fn gather_dealer_count_states_aux<F>(
     dealer_hit_on_soft17: &bool,
     feature_fn: &mut F,
     current_card_count: &mut CardCount,
-    is_visited: &mut StateArray<()>,
+    is_visited: &mut SingleStateArray<()>,
 
     result: &mut Vec<Vec<CardCount>>,
 ) where
@@ -161,7 +161,34 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn get_number_of_hand_states() {
+    fn get_number_of_hand_states_double_group() {
+        let charlie_number: u8 = 6;
+        let f = |_: &CardCount| 0;
+        let initial_hand = CardCount::with_number_of_decks(0);
+        let initial_shoe = CardCount::with_number_of_decks(8);
+        let gathered_states = gather_hand_count_states(
+            &initial_hand,
+            &initial_shoe,
+            charlie_number,
+            f,
+            &SingleStateArray::<()>::new(),
+        );
+
+        let mut mark: SingleStateArray<u32> = Default::default();
+        for state1 in &gathered_states[0] {
+            for state2 in &gathered_states[0] {
+                let mut sum_state = state1.hand.clone();
+                sum_state += &state2.hand;
+                mark[&sum_state] += 1;
+            }
+        }
+
+        println!("Number of states with double hands: {}", mark.len());
+    }
+
+    #[test]
+    #[ignore]
+    fn get_number_of_hand_states_single_group() {
         let charlie_number: u8 = 6;
         let f = |card_count: &CardCount| card_count.get_sum() as usize;
         let initial_hand = CardCount::with_number_of_decks(0);
@@ -171,7 +198,7 @@ mod tests {
             &initial_shoe,
             charlie_number,
             f,
-            &StateArray::<()>::new(),
+            &SingleStateArray::<()>::new(),
         );
         let mut acc = 0;
         for (i, states) in gathered_states.iter().enumerate() {

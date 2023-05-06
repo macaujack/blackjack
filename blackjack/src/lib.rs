@@ -5,7 +5,7 @@ pub mod strategy;
 
 use serde_enum_str::{Deserialize_enum_str, Serialize_enum_str};
 pub use statearray::CardCount;
-pub use statearray::StateArray;
+pub use statearray::SingleStateArray;
 
 #[derive(Clone, Copy)]
 pub struct Rule {
