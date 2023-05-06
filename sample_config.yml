@@ -1,15 +1,18 @@
 rule:
   number_of_decks: 8
-  cut_card_proportion: 0.3333333
+  cut_card_proportion: 0.5
   split_all_limits: 1
   split_ace_limits: 1
   double_policy: AnyTwo
-  dealer_hit_on_soft17: true
-  allow_das: true
-  allow_late_surrender: true
-  peek_policy: UpAceOrTen
+  dealer_hit_on_soft17: false
+  allow_das: false
+  allow_late_surrender: false
+  peek_policy: UpAce
+  charlie_number: 6
 
   payout_blackjack: 1.5
-  payout_insurance: 0.0
+  payout_insurance: 2.0
 
 blackjack_simulator:
+  number_of_threads: 4
+  games_in_period: 10
