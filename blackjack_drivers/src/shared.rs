@@ -51,6 +51,7 @@ impl TryInto<blackjack::Rule> for ConfigRule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigBlackjackSimulator {
     pub number_of_threads: usize,
+    pub games_in_period: u64,
 }
 
 /// Reads the content of a given config file and parses it to a Config.

@@ -10,12 +10,17 @@ mod private {
 
         last_money: i32,
         last_bet: u32,
+
+        min_money: i32,
     }
 
     impl Statistics {
         pub fn bet_money(&mut self, money: u32) {
             self.total_bet += money;
             self.current_money -= money as i32;
+            if self.min_money > self.current_money {
+                self.min_money = self.current_money;
+            }
         }
 
         pub fn receive_money(&mut self, money: u32) {
@@ -45,6 +50,10 @@ mod private {
             self.last_bet = self.total_bet;
             ret
         }
+
+        pub fn get_min_money(&self) -> i32 {
+            self.min_money
+        }
     }
 }
 
@@ -60,6 +69,10 @@ pub fn simulate_playing_forever(
     let mut stat_virtual: Statistics = Default::default();
     // stat_real is used to do statistics when player only places bets if expectation is positive.
     let mut stat_real: Statistics = Default::default();
+    let mut prev_period_end_money = 0;
+    let mut prev_period_end_bet = 0;
+    let mut total_ex_sum = 0.0;
+
     let mut game_id: u64 = 0;
     const BASIC_BET: u32 = 100;
 
@@ -79,7 +92,12 @@ pub fn simulate_playing_forever(
 
         let total_ex =
             dp_strategy.calculate_expectation_before_bet(rule, simulator.get_shoe_card_count());
-        println!("Expectation: {}", total_ex);
+        total_ex_sum += total_ex;
+        println!(
+            "Expectation: {:.6}. Avg: {:.6}",
+            total_ex,
+            total_ex_sum / game_id as f64
+        );
         let bet = {
             if total_ex <= 0.0 {
                 0
@@ -141,21 +159,43 @@ pub fn simulate_playing_forever(
         println!();
         print!("Virtual stat: ");
         println!(
-            "Money: {}({}). Total bet: {}({}). Rate: {}%",
+            "Money: {}({}). Total bet: {}({}). Rate: {:.2}%. Min money: {}.",
             stat_virtual.get_current_money(),
             stat_virtual.get_delta_money(),
             stat_virtual.get_total_bet(),
             stat_virtual.get_delta_bet(),
             stat_virtual.get_rate() * 100.0,
+            stat_virtual.get_min_money(),
         );
         print!("Real stat: ");
         println!(
-            "Money: {}({}). Total bet: {}({}). Rate: {}%",
+            "Money: {}({}). Total bet: {}({}). Rate: {:.2}%. Min money: {}.",
             stat_real.get_current_money(),
             stat_real.get_delta_money(),
             stat_real.get_total_bet(),
             stat_real.get_delta_bet(),
             stat_real.get_rate() * 100.0,
+            stat_real.get_min_money(),
+        );
+
+        println!();
+        let mut period_percentage = game_id % simulator_config.games_in_period;
+        let period_money = stat_real.get_current_money() - prev_period_end_money;
+        let period_bet = stat_real.get_total_bet() - prev_period_end_bet;
+        if period_percentage == 0 {
+            period_percentage = simulator_config.games_in_period as u64;
+            prev_period_end_money = stat_real.get_current_money();
+            prev_period_end_bet = stat_real.get_total_bet();
+        }
+        let period_percentage =
+            (period_percentage * 100 as u64) / simulator_config.games_in_period as u64;
+        print!("This period: ");
+        println!(
+            "Money: {}, Total bet: {}, Rate: {:.2}%. Process: {:.2}%",
+            period_money,
+            period_bet,
+            (period_money * 100) as f64 / period_bet as f64,
+            period_percentage,
         );
         println!("---------------------------------------------------------------------");
     }
