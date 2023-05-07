@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::{AddAssign, Index, IndexMut, SubAssign};
 
-const MOD: u128 = 15729250496591858623;
+const MOD: u128 = 3817949514078926267; // A prime number with 62 bits.
 const BASE: u128 = 211;
 const POW_BASE: [u128; 10] = get_powers_of_base();
 
@@ -73,9 +73,8 @@ impl<T: Copy + Default> DoubleStateArray<T> {
         }
     }
 
-    pub fn contains_state(&self, index: DoubleCardCount) -> bool {
-        let hash = index.0.hash_value | (index.1.hash_value << 32);
-        self.data.contains_key(&hash)
+    pub fn contains_state(&self, index: DoubleCardCountIndex) -> bool {
+        self.data.contains_key(&index.hash_value)
     }
 
     pub fn len(&self) -> usize {
@@ -83,17 +82,16 @@ impl<T: Copy + Default> DoubleStateArray<T> {
     }
 }
 
-impl<T: Copy + Default> Index<DoubleCardCount<'_>> for DoubleStateArray<T> {
+impl<T: Copy + Default> Index<DoubleCardCountIndex> for DoubleStateArray<T> {
     type Output = T;
-    fn index(&self, index: DoubleCardCount) -> &Self::Output {
-        let hash = index.0.hash_value | (index.1.hash_value << 32);
-        &self.data[&hash]
+    fn index(&self, index: DoubleCardCountIndex) -> &Self::Output {
+        &self.data[&index.hash_value]
     }
 }
 
-impl<T: Copy + Default> IndexMut<DoubleCardCount<'_>> for DoubleStateArray<T> {
-    fn index_mut(&mut self, index: DoubleCardCount) -> &mut Self::Output {
-        let hash = index.0.hash_value | (index.1.hash_value << 32);
+impl<T: Copy + Default> IndexMut<DoubleCardCountIndex> for DoubleStateArray<T> {
+    fn index_mut(&mut self, index: DoubleCardCountIndex) -> &mut Self::Output {
+        let hash = index.hash_value;
         if !self.data.contains_key(&hash) {
             self.data.insert(hash, Default::default());
         }
@@ -252,7 +250,32 @@ impl PartialEq for CardCount {
     }
 }
 
-pub type DoubleCardCount<'a> = (&'a CardCount, &'a CardCount);
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HandState {
+    PlaceHolder = 0,
+    Normal,
+    Surrender,
+    Double,
+}
+
+impl Default for HandState {
+    fn default() -> Self {
+        HandState::PlaceHolder
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DoubleCardCountIndex {
+    hash_value: u128,
+}
+
+impl DoubleCardCountIndex {
+    pub fn new(hand0: &CardCount, mul0: HandState, hand1: &CardCount) -> Self {
+        Self {
+            hash_value: hand0.hash_value | ((mul0 as u128) << 62) | (hand1.hash_value << 64),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

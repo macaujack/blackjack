@@ -1,4 +1,5 @@
 mod calculation_states;
+mod split_ex;
 mod stand_hit_ex;
 mod stand_odds;
 
