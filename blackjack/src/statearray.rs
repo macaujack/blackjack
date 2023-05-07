@@ -184,6 +184,18 @@ impl CardCount {
         }
     }
 
+    /// Used to only calculate the hash value after adding. The other fields are
+    /// all in invalid states and cannot be used.
+    pub fn fast_add_assign(&mut self, rhs: &Self) {
+        self.hash_value = (self.hash_value + rhs.hash_value) % MOD;
+    }
+
+    /// Used to only calculate the hash value after substracting. The other fields are
+    /// all in invalid states and cannot be used.
+    pub fn fast_sub_assign(&mut self, rhs: &Self) {
+        self.hash_value = (self.hash_value + MOD - rhs.hash_value) % MOD;
+    }
+
     fn propagate_counts(&mut self) {
         self.hash_value = 0;
         self.sum = 0;

@@ -176,10 +176,11 @@ mod tests {
 
         let mut mark: SingleStateArray<u32> = Default::default();
         for state1 in &gathered_states[0] {
+            let mut sum_state = state1.hand.clone();
             for state2 in &gathered_states[0] {
-                let mut sum_state = state1.hand.clone();
-                sum_state += &state2.hand;
+                sum_state.fast_add_assign(&state2.hand);
                 mark[&sum_state] += 1;
+                sum_state.fast_sub_assign(&state2.hand);
             }
         }
 
