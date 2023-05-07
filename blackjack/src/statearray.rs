@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::{AddAssign, Index, IndexMut, SubAssign};
 
-const MOD: u64 = 1000000007;
-const BASE: u64 = 211;
-const POW_BASE: [u64; 10] = get_powers_of_base();
+const MOD: u128 = 15729250496591858623;
+const BASE: u128 = 211;
+const POW_BASE: [u128; 10] = get_powers_of_base();
 
-const fn get_powers_of_base() -> [u64; 10] {
-    let mut ret: [u64; 10] = [0; 10];
+const fn get_powers_of_base() -> [u128; 10] {
+    let mut ret: [u128; 10] = [0; 10];
     ret[0] = 1;
 
     let mut i = 1;
@@ -23,7 +23,7 @@ const fn get_powers_of_base() -> [u64; 10] {
 /// array.
 #[derive(Debug, Default, Clone)]
 pub struct SingleStateArray<T: Copy + Default> {
-    data: HashMap<u64, T>,
+    data: HashMap<u128, T>,
 }
 
 impl<T: Copy + Default> SingleStateArray<T> {
@@ -63,7 +63,7 @@ impl<T: Copy + Default> IndexMut<&CardCount> for SingleStateArray<T> {
 /// array.
 #[derive(Debug, Default, Clone)]
 pub struct DoubleStateArray<T: Copy + Default> {
-    data: HashMap<u64, T>,
+    data: HashMap<u128, T>,
 }
 
 impl<T: Copy + Default> DoubleStateArray<T> {
@@ -105,7 +105,7 @@ impl<T: Copy + Default> IndexMut<DoubleCardCount<'_>> for DoubleStateArray<T> {
 #[derive(Clone, Debug)]
 pub struct CardCount {
     counts: [u16; 10],
-    hash_value: u64,
+    hash_value: u128,
     sum: u16,
     total: u16,
 }
@@ -201,7 +201,7 @@ impl CardCount {
         self.sum = 0;
         self.total = 0;
         for i in 0..self.counts.len() {
-            self.hash_value += (self.counts[i] as u64) * POW_BASE[i];
+            self.hash_value += (self.counts[i] as u128) * POW_BASE[i];
             self.sum += ((i + 1) as u16) * self.counts[i];
             self.total += self.counts[i] as u16;
         }
@@ -242,7 +242,7 @@ impl Index<u8> for CardCount {
 
 impl Hash for CardCount {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_u64(self.hash_value);
+        state.write_u128(self.hash_value);
     }
 }
 
@@ -270,10 +270,10 @@ mod tests {
         counts
     }
 
-    fn horner_method(counts: &[u16; 10]) -> u64 {
-        let mut ret: u64 = 0;
+    fn horner_method(counts: &[u16; 10]) -> u128 {
+        let mut ret: u128 = 0;
         for i in (0..10).rev() {
-            ret = (ret * BASE + (counts[i] as u64)) % MOD;
+            ret = (ret * BASE + (counts[i] as u128)) % MOD;
         }
 
         ret
