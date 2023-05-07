@@ -1,7 +1,7 @@
 use crate::{
     calculation::{
-        calculate_solution_without_initial_situation, get_max_expectation, SolutionForBettingPhase,
-        SolutionForInitialSituation,
+        calculate_solution_without_initial_situation, get_max_expectation_of_stand_hit_surrender,
+        SolutionForBettingPhase, SolutionForInitialSituation,
     },
     CardCount, Decision, InitialSituation, Rule,
 };
@@ -72,8 +72,11 @@ impl Strategy for DpStrategySinglePlayer {
         current_split_all_times: u8,
         current_split_ace_times: u8,
     ) -> Decision {
-        let (mut mx_ex, mut decision) =
-            get_max_expectation(&self.solution_small.ex_stand_hit, current_hand, rule);
+        let (mut mx_ex, mut decision) = get_max_expectation_of_stand_hit_surrender(
+            &self.solution_small.ex_stand_hit,
+            current_hand,
+            rule,
+        );
         if current_hand.get_total() == 2 {
             if mx_ex < self.solution_small.ex_double {
                 mx_ex = self.solution_small.ex_double;

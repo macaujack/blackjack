@@ -1,28 +1,27 @@
-use self::calculation_states::HandShoePair;
+mod calculation_states;
+mod stand_hit_ex;
+mod stand_odds;
 
 use super::{Decision, PeekPolicy, Rule};
 use crate::{CardCount, InitialSituation, SingleStateArray};
-use std::{cmp::Ordering, ops};
-
-mod calculation_states;
 
 #[derive(Clone, Copy, Debug)]
-pub struct Expectation {
+pub struct ExpectationStandHit {
     pub hit: f64,
     pub stand: f64,
 }
 
-impl Default for Expectation {
+impl Default for ExpectationStandHit {
     fn default() -> Self {
-        Expectation {
+        ExpectationStandHit {
             hit: -f64::INFINITY,
             stand: -f64::INFINITY,
         }
     }
 }
 
-pub fn get_max_expectation(
-    solution: &SingleStateArray<Expectation>,
+pub fn get_max_expectation_of_stand_hit_surrender(
+    solution: &SingleStateArray<ExpectationStandHit>,
     state: &CardCount,
     rule: &Rule,
 ) -> (f64, Decision) {
@@ -56,7 +55,7 @@ pub fn get_max_expectation(
 
 #[derive(Debug, Default)]
 pub struct SolutionForInitialSituation {
-    pub ex_stand_hit: SingleStateArray<Expectation>,
+    pub ex_stand_hit: SingleStateArray<ExpectationStandHit>,
     pub ex_double: f64,
     pub ex_split: f64,
 
@@ -99,7 +98,7 @@ static PREFIX_SUM: [usize; 10] = get_prefix_sum();
 
 #[derive(Debug)]
 pub struct SolutionForBettingPhase {
-    exs_stand_hit: [SingleStateArray<Expectation>; 10],
+    exs_stand_hit: [SingleStateArray<ExpectationStandHit>; 10],
     exs_other_decisions: [[ExsOtherDecisions; 55]; 10],
     ex_total_summary: f64,
 }
@@ -299,7 +298,7 @@ fn calculate_expectations(
     number_of_threads: usize,
     rule: &Rule,
     initial_situation: &InitialSituation,
-    ex_stand_hit: &mut SingleStateArray<Expectation>,
+    ex_stand_hit: &mut SingleStateArray<ExpectationStandHit>,
 ) -> ExsOtherDecisions {
     let mut initial_hand = CardCount::with_number_of_decks(0);
     initial_hand.add_card(initial_situation.hand_cards.0);
@@ -310,7 +309,7 @@ fn calculate_expectations(
 
     // Calculate expectation of Stand and hit.
     if number_of_threads <= 1 {
-        memoization_calculate_stand_hit_expectation(
+        stand_hit_ex::memoization_calculate_stand_hit_expectation(
             rule,
             &initial_situation.dealer_up_card,
             &impossible_dealer_hole_card,
@@ -319,7 +318,7 @@ fn calculate_expectations(
             ex_stand_hit,
         );
     } else {
-        multithreading_calculate_stand_hit_expectation(
+        stand_hit_ex::multithreading_calculate_stand_hit_expectation(
             number_of_threads,
             rule,
             initial_situation.dealer_up_card,
@@ -375,7 +374,8 @@ fn calculate_expectations(
         ex_early_end += ex_extra_insurance * 0.5;
     }
     let ex_no_early_end = {
-        let (mut ex, _) = get_max_expectation(&ex_stand_hit, &initial_hand, rule);
+        let (mut ex, _) =
+            get_max_expectation_of_stand_hit_surrender(&ex_stand_hit, &initial_hand, rule);
         if ex < ex_double {
             ex = ex_double;
         }
@@ -392,445 +392,11 @@ fn calculate_expectations(
     }
 }
 
-fn multithreading_calculate_stand_hit_expectation(
-    // Input parameters
-    number_of_threads: usize,
-    rule: &Rule,
-    dealer_up_card: u8,
-    impossible_dealer_hole_card: u8,
-
-    // Parameters to maintain current state
-    initial_shoe: &CardCount,
-    initial_hand: &CardCount,
-
-    // Output parameters
-    ex_stand_hit: &mut SingleStateArray<Expectation>,
-) {
-    let feature_fn = |c: &'_ CardCount| c.get_total() as usize;
-    let mut valid_pairs = calculation_states::gather_hand_count_states(
-        initial_hand,
-        initial_shoe,
-        rule.charlie_number,
-        feature_fn,
-        ex_stand_hit,
-    );
-    let mut dispatched_hands: Vec<Vec<HandShoePair>> = Vec::with_capacity(number_of_threads);
-    for _ in 0..number_of_threads {
-        dispatched_hands.push(Vec::new());
-    }
-    let mut state_count = 0;
-    for pairs in &valid_pairs {
-        for pair in pairs {
-            // Obvious case 1: Bust
-            if pair.hand.bust() {
-                ex_stand_hit[&pair.hand] = Expectation {
-                    stand: -1.0,
-                    ..Default::default()
-                };
-                continue;
-            }
-
-            // Obvious case 2: Charlie number reached.
-            if pair.hand.get_total() == rule.charlie_number as u16 {
-                ex_stand_hit[&pair.hand] = Expectation {
-                    stand: 1.0,
-                    ..Default::default()
-                };
-                continue;
-            }
-
-            if pair.hand.get_actual_sum() <= 11 && pair.hand.get_total() != 3 {
-                ex_stand_hit[&pair.hand] = Expectation {
-                    stand: -f64::INFINITY,
-                    hit: 0.0,
-                };
-                continue;
-            }
-            ex_stand_hit[&pair.hand] = Expectation {
-                stand: 0.0,
-                hit: 0.0,
-            };
-
-            // Obvious case 3: Current actual sum is 21. Stand!
-            if pair.hand.get_actual_sum() == 21 {
-                ex_stand_hit[&pair.hand] = Expectation {
-                    stand: 0.0,
-                    ..Default::default()
-                };
-                // Don't continue here, because we want to calculate the expectation
-                // of Stand.
-            }
-            dispatched_hands[state_count % number_of_threads].push(pair.clone());
-            state_count += 1;
-        }
-    }
-
-    // Calculate expectation of Stand.
-    let mut threads = Vec::with_capacity(number_of_threads - 1);
-    let raw_ex_stand_hit = ex_stand_hit as *mut SingleStateArray<Expectation> as usize;
-    for _ in 1..number_of_threads {
-        let pairs_for_thread = dispatched_hands.pop().unwrap();
-        let rule = *rule;
-        let thread = std::thread::spawn(move || {
-            for pair in &pairs_for_thread {
-                let stand_odds =
-                    calculate_stand_odds(&rule, &pair.hand, &dealer_up_card, &pair.shoe);
-                unsafe {
-                    // This is OK, since the threads are not modifying the same memory.
-                    let ex_stand_hit =
-                        &mut *(raw_ex_stand_hit as *mut SingleStateArray<Expectation>);
-                    ex_stand_hit[&pair.hand].stand = {
-                        if pair.hand.is_natural() {
-                            stand_odds.win * rule.payout_blackjack - stand_odds.lose
-                        } else {
-                            stand_odds.win - stand_odds.lose
-                        }
-                    };
-                }
-            }
-        });
-        threads.push(thread);
-    }
-    for pair in dispatched_hands.first().unwrap() {
-        let stand_odds = calculate_stand_odds(&rule, &pair.hand, &dealer_up_card, &pair.shoe);
-        ex_stand_hit[&pair.hand].stand = {
-            if pair.hand.is_natural() {
-                stand_odds.win * rule.payout_blackjack - stand_odds.lose
-            } else {
-                stand_odds.win - stand_odds.lose
-            }
-        };
-    }
-    for thread in threads {
-        let _ = thread.join();
-    }
-
-    // Calculate expectation of Hit.
-    for pairs in valid_pairs.iter_mut().rev() {
-        for pair in pairs {
-            if ex_stand_hit[&pair.hand].hit != 0.0 {
-                continue;
-            }
-
-            for next_card in 1..=10 {
-                if pair.shoe[next_card] == 0 {
-                    continue;
-                }
-                pair.hand.add_card(next_card);
-                let (ex_max, _) = get_max_expectation(ex_stand_hit, &pair.hand, rule);
-                pair.hand.remove_card(next_card);
-                let p = get_card_probability(&pair.shoe, impossible_dealer_hole_card, next_card);
-                ex_stand_hit[&pair.hand].hit += p * ex_max;
-            }
-        }
-    }
-}
-
-fn memoization_calculate_stand_hit_expectation(
-    // Input parameters
-    rule: &Rule,
-    dealer_up_card: &u8,
-    impossible_dealer_hole_card: &u8,
-
-    // Parameters to maintain current state
-    current_shoe: &mut CardCount,
-    current_hand: &mut CardCount,
-
-    // Output parameters
-    ex_stand_hit: &mut SingleStateArray<Expectation>,
-) {
-    if ex_stand_hit.contains_state(current_hand) {
-        return;
-    }
-
-    // Obvious case 1: Bust
-    if current_hand.bust() {
-        ex_stand_hit[current_hand] = Expectation {
-            stand: -1.0,
-            ..Default::default()
-        };
-        return;
-    }
-
-    // Obvious case 2: Charlie number reached.
-    if current_hand.get_total() == rule.charlie_number as u16 {
-        ex_stand_hit[current_hand] = Expectation {
-            stand: 1.0,
-            ..Default::default()
-        };
-        return;
-    }
-
-    // Obvious case 3: Current actual sum is 21. Stand!
-    if current_hand.get_actual_sum() == 21 {
-        let stand_odds = calculate_stand_odds(rule, current_hand, dealer_up_card, current_shoe);
-
-        let stand = {
-            if current_hand.is_natural() {
-                stand_odds.win * rule.payout_blackjack - stand_odds.lose
-            } else {
-                stand_odds.win - stand_odds.lose
-            }
-        };
-        ex_stand_hit[current_hand] = Expectation {
-            stand,
-            ..Default::default()
-        };
-        return;
-    }
-
-    // End of obvious cases. Calculate expectation of Hit using theory of total expectation.
-    ex_stand_hit[current_hand] = Expectation {
-        hit: 0.0,
-        ..Default::default()
-    };
-
-    for i in 1..=10 {
-        if current_shoe[i] == 0 {
-            continue;
-        }
-
-        current_shoe.remove_card(i);
-        current_hand.add_card(i);
-
-        memoization_calculate_stand_hit_expectation(
-            rule,
-            dealer_up_card,
-            impossible_dealer_hole_card,
-            current_shoe,
-            current_hand,
-            ex_stand_hit,
-        );
-
-        let (ex_max, _) = get_max_expectation(ex_stand_hit, current_hand, rule);
-
-        current_hand.remove_card(i);
-        current_shoe.add_card(i);
-
-        let p = get_card_probability(current_shoe, *impossible_dealer_hole_card, i);
-        ex_stand_hit[current_hand].hit += p * ex_max;
-    }
-
-    // Calculate expectation of Stand.
-    ex_stand_hit[current_hand].stand = {
-        // Optimization here. No need to calculate stand odds when player's hands is <= 11 and total number of cards != 3, because
-        // in this case, player should obviously hit.
-        // When total number of cards is 3, we still need to calculate stand odds, because the stand expectation is used to
-        // calculate double expectation.
-        if current_hand.get_actual_sum() <= 11 && current_hand.get_total() != 3 {
-            -f64::INFINITY
-        } else {
-            let stand_odds = calculate_stand_odds(rule, current_hand, dealer_up_card, current_shoe);
-            stand_odds.win - stand_odds.lose
-        }
-    };
-}
-
-#[derive(Clone, Copy, Default, Debug)]
-struct WinLoseCasesOdds {
-    win: f64,
-    push: f64,
-    lose: f64,
-}
-
-impl ops::AddAssign<&WinLoseCasesOdds> for WinLoseCasesOdds {
-    fn add_assign(&mut self, rhs: &WinLoseCasesOdds) {
-        self.win += rhs.win;
-        self.push += rhs.push;
-        self.lose += rhs.lose;
-    }
-}
-
-impl ops::Mul<f64> for WinLoseCasesOdds {
-    type Output = WinLoseCasesOdds;
-    fn mul(self, rhs: f64) -> Self::Output {
-        WinLoseCasesOdds {
-            win: self.win * rhs,
-            push: self.push * rhs,
-            lose: self.lose * rhs,
-        }
-    }
-}
-
-fn calculate_stand_odds(
-    rule: &Rule,
-    player_hand: &CardCount,
-    dealer_up_card: &u8,
-    shoe: &CardCount,
-) -> WinLoseCasesOdds {
-    let mut dealer_extra_hand = CardCount::new(&[0; 10]);
-    let player_sum = player_hand.get_actual_sum();
-
-    // Special case: Player hand is natural Blackjack
-    if player_hand.is_natural() {
-        let p_dealer_also_natural = match rule.peek_policy {
-            PeekPolicy::UpAceOrTen => 0.0,
-            PeekPolicy::UpAce => match *dealer_up_card {
-                10 => get_card_probability(shoe, 0, 1),
-                _ => 0.0,
-            },
-            PeekPolicy::NoPeek => match *dealer_up_card {
-                1 => get_card_probability(shoe, 0, 10),
-                10 => get_card_probability(shoe, 0, 1),
-                _ => 0.0,
-            },
-        };
-        return WinLoseCasesOdds {
-            win: 1.0 - p_dealer_also_natural,
-            push: p_dealer_also_natural,
-            lose: 0.0,
-        };
-    }
-
-    let mut odds = SingleStateArray::new();
-
-    memoization_find_win_lose_odds(
-        rule,
-        &player_sum,
-        dealer_up_card,
-        &shoe,
-        &mut dealer_extra_hand,
-        &mut odds,
-    );
-
-    odds[&dealer_extra_hand]
-}
-
-/// Note that the callers of this function must ensure that if player_sum is 21, it must NOT be
-/// a natural Blackjack. Player natural Blackjack should be handled separately as a special
-/// case before recursively calling this function.
-fn memoization_find_win_lose_odds(
-    // Input parameters
-    rule: &Rule,
-    player_sum: &u16,
-    dealer_up_card: &u8,
-    original_shoe: &CardCount, // Original cards in the shoe just before dealer's hole card is revealed
-
-    // Parameters to maintain current state
-    dealer_extra_hand: &mut CardCount, // Dealer's hand except for the up card
-    odds: &mut SingleStateArray<WinLoseCasesOdds>,
-) {
-    if odds.contains_state(dealer_extra_hand) {
-        return;
-    }
-
-    // Case 1: Dealer must stand.
-    let dealer_sum = dealer_extra_hand.get_sum() + (*dealer_up_card as u16);
-    let is_soft = dealer_extra_hand.is_soft() || *dealer_up_card == 1;
-    if dealer_sum > 21 {
-        odds[dealer_extra_hand] = WinLoseCasesOdds {
-            win: 1.0,
-            ..Default::default()
-        };
-        return;
-    }
-    if dealer_sum >= 17 {
-        // Hard sum >= 17
-        add_to_win_lose_cases_count(*player_sum, dealer_sum, &mut odds[dealer_extra_hand], 1.0);
-        return;
-    }
-    if is_soft {
-        // Dealer gets natural Blackjack!! OMG!!
-        // Note that if the peek policy is UpAceOrTen, dealer will peek the hole card when the up card is Ace or 10,
-        // which immediately ends the game if she gets a natural Blackjack. This in turn makes the following 'if'
-        // impossible to run.
-        if dealer_sum + 10 == 21 && dealer_extra_hand.get_total() == 1 {
-            odds[dealer_extra_hand] = WinLoseCasesOdds {
-                lose: 1.0,
-                ..Default::default()
-            };
-            return;
-        }
-
-        let lower_bound = {
-            if rule.dealer_hit_on_soft17 {
-                18
-            } else {
-                17
-            }
-        };
-        if dealer_sum + 10 >= lower_bound && dealer_sum + 10 <= 21 {
-            add_to_win_lose_cases_count(
-                *player_sum,
-                dealer_sum + 10,
-                &mut odds[dealer_extra_hand],
-                1.0,
-            );
-            return;
-        }
-    }
-
-    // Case 2: Dealer must hit.
-    let (next_card_min, next_card_max, current_valid_shoe_total) = {
-        if dealer_extra_hand.get_total() != 0 {
-            (
-                1,
-                10,
-                original_shoe.get_total() - dealer_extra_hand.get_total(),
-            )
-        } else {
-            // Yes this is an ugly piece of code. If Rust supports 'fallthrough' in the pattern matching,
-            // the code can be much cleaner.
-            match rule.peek_policy {
-                PeekPolicy::UpAceOrTen => match *dealer_up_card {
-                    1 => (1, 9, original_shoe.get_total() - original_shoe[10]),
-                    10 => (2, 10, original_shoe.get_total() - original_shoe[1]),
-                    _ => (1, 10, original_shoe.get_total()),
-                },
-                PeekPolicy::UpAce => match *dealer_up_card {
-                    1 => (1, 9, original_shoe.get_total() - original_shoe[10]),
-                    _ => (1, 10, original_shoe.get_total()),
-                },
-                PeekPolicy::NoPeek => (
-                    1,
-                    10,
-                    original_shoe.get_total() - dealer_extra_hand.get_total(),
-                ),
-            }
-        }
-    };
-    let current_valid_shoe_total = current_valid_shoe_total as f64;
-
-    for card in next_card_min..=next_card_max {
-        if dealer_extra_hand[card] == original_shoe[card] {
-            continue;
-        }
-
-        dealer_extra_hand.add_card(card);
-        memoization_find_win_lose_odds(
-            rule,
-            player_sum,
-            dealer_up_card,
-            original_shoe,
-            dealer_extra_hand,
-            odds,
-        );
-        let next_state_odds = odds[dealer_extra_hand];
-        dealer_extra_hand.remove_card(card);
-
-        let p = ((original_shoe[card] - dealer_extra_hand[card]) as f64) / current_valid_shoe_total;
-        odds[dealer_extra_hand] += &(next_state_odds * p);
-    }
-}
-
-fn add_to_win_lose_cases_count(
-    player_sum: u16,
-    dealer_sum: u16,
-    count: &mut WinLoseCasesOdds,
-    delta: f64,
-) {
-    match player_sum.cmp(&dealer_sum) {
-        Ordering::Less => count.lose += delta,
-        Ordering::Equal => count.push += delta,
-        Ordering::Greater => count.win += delta,
-    }
-}
-
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
-    fn get_typical_rule() -> Rule {
+    pub fn get_typical_rule() -> Rule {
         Rule {
             number_of_decks: 8,
             cut_card_proportion: 0.5,
@@ -846,27 +412,6 @@ mod tests {
             payout_blackjack: 1.5,
             payout_insurance: 2.0,
         }
-    }
-
-    #[test]
-    #[ignore]
-    fn test_find_win_lose_cases_count() {
-        let rule = get_typical_rule();
-        let original_shoe = CardCount::new(&[0, 0, 1, 0, 0, 0, 1, 0, 0, 1]);
-        let mut dealer_extra_hand = CardCount::new(&[0; 10]);
-        let mut odds = SingleStateArray::new();
-        memoization_find_win_lose_odds(
-            &rule,
-            &18,
-            &1,
-            &original_shoe,
-            &mut dealer_extra_hand,
-            &mut odds,
-        );
-
-        let od = odds[&CardCount::new(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0])];
-        println!("{:#?}", od);
-        println!("{:#?}", od.win + od.push + od.lose);
     }
 
     #[test]
@@ -965,8 +510,11 @@ mod tests {
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
-                let (mut _mx, mut decision) =
-                    get_max_expectation(&sol.ex_stand_hit, &initial_hand, &rule);
+                let (mut _mx, mut decision) = get_max_expectation_of_stand_hit_surrender(
+                    &sol.ex_stand_hit,
+                    &initial_hand,
+                    &rule,
+                );
                 if _mx < sol.ex_double {
                     _mx = sol.ex_double;
                     decision = Decision::Double;
@@ -1000,8 +548,11 @@ mod tests {
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
-                let (mut _mx, mut decision) =
-                    get_max_expectation(&sol.ex_stand_hit, &initial_hand, &rule);
+                let (mut _mx, mut decision) = get_max_expectation_of_stand_hit_surrender(
+                    &sol.ex_stand_hit,
+                    &initial_hand,
+                    &rule,
+                );
                 if _mx < sol.ex_double {
                     _mx = sol.ex_double;
                     decision = Decision::Double;
@@ -1038,8 +589,11 @@ mod tests {
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(hand_cards.0);
                 initial_hand.add_card(hand_cards.1);
-                let (mut _mx, mut decision) =
-                    get_max_expectation(&sol.ex_stand_hit, &initial_hand, &rule);
+                let (mut _mx, mut decision) = get_max_expectation_of_stand_hit_surrender(
+                    &sol.ex_stand_hit,
+                    &initial_hand,
+                    &rule,
+                );
                 if _mx < sol.ex_double {
                     _mx = sol.ex_double;
                     decision = Decision::Double;
@@ -1058,8 +612,11 @@ mod tests {
                 let mut initial_hand = CardCount::new(&[0; 10]);
                 initial_hand.add_card(1);
                 initial_hand.add_card(another_card);
-                let (mut _mx, mut decision) =
-                    get_max_expectation(&sol.ex_stand_hit, &initial_hand, &rule);
+                let (mut _mx, mut decision) = get_max_expectation_of_stand_hit_surrender(
+                    &sol.ex_stand_hit,
+                    &initial_hand,
+                    &rule,
+                );
                 if _mx < sol.ex_double {
                     _mx = sol.ex_double;
                     decision = Decision::Double;
