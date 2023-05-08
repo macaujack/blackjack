@@ -1,6 +1,6 @@
 use super::calculation_states;
 use super::calculation_states::HandShoePair;
-use super::stand_odds::{memoization_find_win_lose_odds, DealerHandHandler};
+use super::stand_odds::{memoization_dealer_get_cards, DealerHandHandler};
 use super::{
     get_card_probability, get_max_expectation_of_stand_hit_surrender, ExpectationStandHit,
 };
@@ -326,7 +326,7 @@ fn calculate_stand_odds_single_hand(
     };
 
     match (next_card_min, next_card_max) {
-        (1, 10) => memoization_find_win_lose_odds::<WinLoseCasesOdds, 1, 10>(
+        (1, 10) => memoization_dealer_get_cards::<WinLoseCasesOdds, 1, 10>(
             rule,
             &player_sum,
             dealer_up_card,
@@ -334,7 +334,7 @@ fn calculate_stand_odds_single_hand(
             &mut dealer_extra_hand,
             &mut odds,
         ),
-        (1, 9) => memoization_find_win_lose_odds::<WinLoseCasesOdds, 1, 9>(
+        (1, 9) => memoization_dealer_get_cards::<WinLoseCasesOdds, 1, 9>(
             rule,
             &player_sum,
             dealer_up_card,
@@ -342,7 +342,7 @@ fn calculate_stand_odds_single_hand(
             &mut dealer_extra_hand,
             &mut odds,
         ),
-        (2, 10) => memoization_find_win_lose_odds::<WinLoseCasesOdds, 2, 10>(
+        (2, 10) => memoization_dealer_get_cards::<WinLoseCasesOdds, 2, 10>(
             rule,
             &player_sum,
             dealer_up_card,
@@ -368,7 +368,7 @@ mod tests {
         let original_shoe = CardCount::new(&[0, 0, 1, 0, 0, 0, 1, 0, 0, 1]);
         let mut dealer_extra_hand = CardCount::new(&[0; 10]);
         let mut odds = SingleStateArray::new();
-        memoization_find_win_lose_odds::<WinLoseCasesOdds, 1, 9>(
+        memoization_dealer_get_cards::<WinLoseCasesOdds, 1, 9>(
             &rule,
             &18,
             &1,

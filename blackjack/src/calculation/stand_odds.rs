@@ -16,7 +16,7 @@ pub trait DealerHandHandler {
 /// Note that the callers of this function must ensure that if player_sum is 21, it must NOT be
 /// a natural Blackjack. Player natural Blackjack should be handled separately as a special
 /// case before recursively calling this function.
-pub fn memoization_find_win_lose_odds<
+pub fn memoization_dealer_get_cards<
     T: Default + DealerHandHandler,
     const NEXT_CARD_MIN: u8,
     const NEXT_CARD_MAX: u8,
@@ -89,7 +89,7 @@ pub fn memoization_find_win_lose_odds<
         }
 
         dealer_extra_hand.add_card(card);
-        memoization_find_win_lose_odds::<T, 1, 10>(
+        memoization_dealer_get_cards::<T, 1, 10>(
             rule,
             player_sum,
             dealer_up_card,
