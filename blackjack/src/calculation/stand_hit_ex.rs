@@ -1,10 +1,11 @@
 use super::calculation_states;
 use super::calculation_states::HandShoePair;
-use super::stand_odds::calculate_stand_odds_single_hand;
+use super::stand_odds::{memoization_find_win_lose_odds, DealerHandHandler};
 use super::{
     get_card_probability, get_max_expectation_of_stand_hit_surrender, ExpectationStandHit,
 };
-use crate::{CardCount, Rule, SingleStateArray};
+use crate::{CardCount, PeekPolicy, Rule, SingleStateArray};
+use std::cmp::Ordering;
 
 pub fn multithreading_calculate_stand_hit_expectation(
     // Input parameters
@@ -247,4 +248,136 @@ pub fn memoization_calculate_stand_hit_expectation(
             stand_odds.win - stand_odds.lose
         }
     };
+}
+
+#[derive(Clone, Default, Debug)]
+struct WinLoseCasesOdds {
+    win: f64,
+    lose: f64,
+}
+
+impl DealerHandHandler for WinLoseCasesOdds {
+    fn end_with_dealer_bust(&mut self) {
+        self.win = 1.0;
+    }
+
+    fn end_with_dealer_normal(&mut self, dealer_actual_sum: u16, player_actual_sum: u16) {
+        match player_actual_sum.cmp(&dealer_actual_sum) {
+            Ordering::Less => self.lose = 1.0,
+            Ordering::Equal => {}
+            Ordering::Greater => self.win = 1.0,
+        }
+    }
+
+    fn end_with_dealer_natural(&mut self) {
+        self.lose = 1.0;
+    }
+
+    fn add_assign_with_p(&mut self, rhs: &Self, p: f64) {
+        self.win += rhs.win * p;
+        self.lose += rhs.lose * p;
+    }
+}
+
+/// Note that this function doesn't consider the situation where player's hand
+/// reach Charlie number. This case should be handled separately before calling
+/// this function.
+fn calculate_stand_odds_single_hand(
+    rule: &Rule,
+    player_hand: &CardCount,
+    dealer_up_card: &u8,
+    shoe: &CardCount,
+) -> WinLoseCasesOdds {
+    let mut dealer_extra_hand = CardCount::new(&[0; 10]);
+    let player_sum = player_hand.get_actual_sum();
+
+    // Special case: Player hand is natural Blackjack
+    if player_hand.is_natural() {
+        let p_dealer_also_natural = match rule.peek_policy {
+            PeekPolicy::UpAceOrTen => 0.0,
+            PeekPolicy::UpAce => match *dealer_up_card {
+                10 => get_card_probability(shoe, 0, 1),
+                _ => 0.0,
+            },
+            PeekPolicy::NoPeek => match *dealer_up_card {
+                1 => get_card_probability(shoe, 0, 10),
+                10 => get_card_probability(shoe, 0, 1),
+                _ => 0.0,
+            },
+        };
+        return WinLoseCasesOdds {
+            win: 1.0 - p_dealer_also_natural,
+            lose: 0.0,
+        };
+    }
+
+    let mut odds = SingleStateArray::new();
+    let (next_card_min, next_card_max) = match rule.peek_policy {
+        PeekPolicy::UpAceOrTen => match *dealer_up_card {
+            1 => (1, 9),
+            10 => (2, 10),
+            _ => (1, 10),
+        },
+        PeekPolicy::UpAce => match *dealer_up_card {
+            1 => (1, 9),
+            _ => (1, 10),
+        },
+        PeekPolicy::NoPeek => (1, 10),
+    };
+
+    match (next_card_min, next_card_max) {
+        (1, 10) => memoization_find_win_lose_odds::<WinLoseCasesOdds, 1, 10>(
+            rule,
+            &player_sum,
+            dealer_up_card,
+            &shoe,
+            &mut dealer_extra_hand,
+            &mut odds,
+        ),
+        (1, 9) => memoization_find_win_lose_odds::<WinLoseCasesOdds, 1, 9>(
+            rule,
+            &player_sum,
+            dealer_up_card,
+            &shoe,
+            &mut dealer_extra_hand,
+            &mut odds,
+        ),
+        (2, 10) => memoization_find_win_lose_odds::<WinLoseCasesOdds, 2, 10>(
+            rule,
+            &player_sum,
+            dealer_up_card,
+            &shoe,
+            &mut dealer_extra_hand,
+            &mut odds,
+        ),
+        _ => panic!("Impossible to reach"),
+    }
+
+    odds[&dealer_extra_hand].clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::get_typical_rule;
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn test_find_win_lose_cases_count() {
+        let rule = get_typical_rule();
+        let original_shoe = CardCount::new(&[0, 0, 1, 0, 0, 0, 1, 0, 0, 1]);
+        let mut dealer_extra_hand = CardCount::new(&[0; 10]);
+        let mut odds = SingleStateArray::new();
+        memoization_find_win_lose_odds::<WinLoseCasesOdds, 1, 9>(
+            &rule,
+            &18,
+            &1,
+            &original_shoe,
+            &mut dealer_extra_hand,
+            &mut odds,
+        );
+
+        let od = &odds[&CardCount::new(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0])];
+        println!("{:#?}", od);
+    }
 }

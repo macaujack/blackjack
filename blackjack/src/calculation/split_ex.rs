@@ -39,7 +39,7 @@ pub trait ExpectationAfterSplit {
     }
 }
 
-pub fn memoization_calculate_split_expectation<T: ExpectationAfterSplit + Default + Copy>(
+pub fn memoization_calculate_split_expectation<T: ExpectationAfterSplit + Default>(
     // Input parameters
     rule: &Rule,
     dealer_up_card: &u8,
@@ -78,7 +78,7 @@ pub fn memoization_calculate_split_expectation<T: ExpectationAfterSplit + Defaul
     }
 }
 
-fn memoization_calculate_split_expectation_aux0<T: ExpectationAfterSplit + Default + Copy>(
+fn memoization_calculate_split_expectation_aux0<T: ExpectationAfterSplit + Default>(
     // Input parameters
     rule: &Rule,
     dealer_up_card: &u8,
@@ -208,7 +208,7 @@ fn memoization_calculate_split_expectation_aux0<T: ExpectationAfterSplit + Defau
     }
 }
 
-fn memoization_calculate_split_expectation_aux1<T: ExpectationAfterSplit + Default + Copy>(
+fn memoization_calculate_split_expectation_aux1<T: ExpectationAfterSplit + Default>(
     // Input parameters
     rule: &Rule,
     dealer_up_card: &u8,
@@ -264,7 +264,7 @@ fn memoization_calculate_split_expectation_aux1<T: ExpectationAfterSplit + Defau
     }
 }
 
-#[derive(Debug, Clone, Copy, ExpectationAfterSplit)]
+#[derive(Debug, Clone, ExpectationAfterSplit)]
 pub struct ExpectationSHDR {
     stand: f64,
     hit: f64,
@@ -272,21 +272,21 @@ pub struct ExpectationSHDR {
     surrender: f64,
 }
 
-#[derive(Debug, Clone, Copy, ExpectationAfterSplit)]
+#[derive(Debug, Clone, ExpectationAfterSplit)]
 pub struct ExpectationSHD {
     stand: f64,
     hit: f64,
     double: f64,
 }
 
-#[derive(Debug, Clone, Copy, ExpectationAfterSplit)]
+#[derive(Debug, Clone, ExpectationAfterSplit)]
 pub struct ExpectationSHR {
     stand: f64,
     hit: f64,
     surrender: f64,
 }
 
-#[derive(Debug, Clone, Copy, ExpectationAfterSplit)]
+#[derive(Debug, Clone, ExpectationAfterSplit)]
 pub struct ExpectationSH {
     stand: f64,
     hit: f64,

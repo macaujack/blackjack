@@ -1,112 +1,26 @@
-use super::get_card_probability;
-use crate::{CardCount, PeekPolicy, Rule, SingleStateArray};
-use std::{cmp::Ordering, ops};
+use crate::{CardCount, Rule, SingleStateArray};
 
-#[derive(Clone, Copy, Default, Debug)]
-pub struct WinLoseCasesOdds {
-    pub win: f64,
-    pub push: f64,
-    pub lose: f64,
-}
+/// Note that the callers of `end_with_dealer_*` functions must handle the following cases separately before
+/// calling this function:
+/// 1. Player's hand busts.
+/// 2. Player's hand reaches Charlie number.
+/// 3. Player gets a natural Blackjack.
+pub trait DealerHandHandler {
+    fn end_with_dealer_bust(&mut self);
+    fn end_with_dealer_normal(&mut self, dealer_actual_sum: u16, player_actual_sum: u16);
+    fn end_with_dealer_natural(&mut self);
 
-impl ops::AddAssign<&WinLoseCasesOdds> for WinLoseCasesOdds {
-    fn add_assign(&mut self, rhs: &WinLoseCasesOdds) {
-        self.win += rhs.win;
-        self.push += rhs.push;
-        self.lose += rhs.lose;
-    }
-}
-
-impl ops::Mul<f64> for WinLoseCasesOdds {
-    type Output = WinLoseCasesOdds;
-    fn mul(self, rhs: f64) -> Self::Output {
-        WinLoseCasesOdds {
-            win: self.win * rhs,
-            push: self.push * rhs,
-            lose: self.lose * rhs,
-        }
-    }
-}
-
-pub fn calculate_stand_odds_single_hand(
-    rule: &Rule,
-    player_hand: &CardCount,
-    dealer_up_card: &u8,
-    shoe: &CardCount,
-) -> WinLoseCasesOdds {
-    let mut dealer_extra_hand = CardCount::new(&[0; 10]);
-    let player_sum = player_hand.get_actual_sum();
-
-    // Special case: Player hand is natural Blackjack
-    if player_hand.is_natural() {
-        let p_dealer_also_natural = match rule.peek_policy {
-            PeekPolicy::UpAceOrTen => 0.0,
-            PeekPolicy::UpAce => match *dealer_up_card {
-                10 => get_card_probability(shoe, 0, 1),
-                _ => 0.0,
-            },
-            PeekPolicy::NoPeek => match *dealer_up_card {
-                1 => get_card_probability(shoe, 0, 10),
-                10 => get_card_probability(shoe, 0, 1),
-                _ => 0.0,
-            },
-        };
-        return WinLoseCasesOdds {
-            win: 1.0 - p_dealer_also_natural,
-            push: p_dealer_also_natural,
-            lose: 0.0,
-        };
-    }
-
-    let mut odds = SingleStateArray::new();
-    let (next_card_min, next_card_max) = match rule.peek_policy {
-        PeekPolicy::UpAceOrTen => match *dealer_up_card {
-            1 => (1, 9),
-            10 => (2, 10),
-            _ => (1, 10),
-        },
-        PeekPolicy::UpAce => match *dealer_up_card {
-            1 => (1, 9),
-            _ => (1, 10),
-        },
-        PeekPolicy::NoPeek => (1, 10),
-    };
-
-    match (next_card_min, next_card_max) {
-        (1, 10) => memoization_find_win_lose_odds::<1, 10>(
-            rule,
-            &player_sum,
-            dealer_up_card,
-            &shoe,
-            &mut dealer_extra_hand,
-            &mut odds,
-        ),
-        (1, 9) => memoization_find_win_lose_odds::<1, 9>(
-            rule,
-            &player_sum,
-            dealer_up_card,
-            &shoe,
-            &mut dealer_extra_hand,
-            &mut odds,
-        ),
-        (2, 10) => memoization_find_win_lose_odds::<2, 10>(
-            rule,
-            &player_sum,
-            dealer_up_card,
-            &shoe,
-            &mut dealer_extra_hand,
-            &mut odds,
-        ),
-        _ => panic!("Impossible to reach"),
-    }
-
-    odds[&dealer_extra_hand]
+    fn add_assign_with_p(&mut self, rhs: &Self, p: f64);
 }
 
 /// Note that the callers of this function must ensure that if player_sum is 21, it must NOT be
 /// a natural Blackjack. Player natural Blackjack should be handled separately as a special
 /// case before recursively calling this function.
-fn memoization_find_win_lose_odds<const NEXT_CARD_MIN: u8, const NEXT_CARD_MAX: u8>(
+pub fn memoization_find_win_lose_odds<
+    T: Default + DealerHandHandler,
+    const NEXT_CARD_MIN: u8,
+    const NEXT_CARD_MAX: u8,
+>(
     // Input parameters
     rule: &Rule,
     player_sum: &u16,
@@ -115,25 +29,23 @@ fn memoization_find_win_lose_odds<const NEXT_CARD_MIN: u8, const NEXT_CARD_MAX: 
 
     // Parameters to maintain current state
     dealer_extra_hand: &mut CardCount, // Dealer's hand except for the up card
-    odds: &mut SingleStateArray<WinLoseCasesOdds>,
+    odds: &mut SingleStateArray<T>,
 ) {
     if odds.contains_state(dealer_extra_hand) {
         return;
     }
+    odds[dealer_extra_hand] = Default::default();
 
     // Case 1: Dealer must stand.
     let dealer_sum = dealer_extra_hand.get_sum() + (*dealer_up_card as u16);
     let is_soft = dealer_extra_hand.is_soft() || *dealer_up_card == 1;
     if dealer_sum > 21 {
-        odds[dealer_extra_hand] = WinLoseCasesOdds {
-            win: 1.0,
-            ..Default::default()
-        };
+        odds[dealer_extra_hand].end_with_dealer_bust();
         return;
     }
     if dealer_sum >= 17 {
         // Hard sum >= 17
-        add_to_win_lose_cases_count(*player_sum, dealer_sum, &mut odds[dealer_extra_hand], 1.0);
+        odds[dealer_extra_hand].end_with_dealer_normal(dealer_sum, *player_sum);
         return;
     }
     if is_soft {
@@ -142,10 +54,7 @@ fn memoization_find_win_lose_odds<const NEXT_CARD_MIN: u8, const NEXT_CARD_MAX: 
         // which immediately ends the game if she gets a natural Blackjack. This in turn makes the following 'if'
         // impossible to run.
         if dealer_sum + 10 == 21 && dealer_extra_hand.get_total() == 1 {
-            odds[dealer_extra_hand] = WinLoseCasesOdds {
-                lose: 1.0,
-                ..Default::default()
-            };
+            odds[dealer_extra_hand].end_with_dealer_natural();
             return;
         }
 
@@ -157,12 +66,7 @@ fn memoization_find_win_lose_odds<const NEXT_CARD_MIN: u8, const NEXT_CARD_MAX: 
             }
         };
         if dealer_sum + 10 >= lower_bound && dealer_sum + 10 <= 21 {
-            add_to_win_lose_cases_count(
-                *player_sum,
-                dealer_sum + 10,
-                &mut odds[dealer_extra_hand],
-                1.0,
-            );
+            odds[dealer_extra_hand].end_with_dealer_normal(dealer_sum + 10, *player_sum);
             return;
         }
     }
@@ -185,7 +89,7 @@ fn memoization_find_win_lose_odds<const NEXT_CARD_MIN: u8, const NEXT_CARD_MAX: 
         }
 
         dealer_extra_hand.add_card(card);
-        memoization_find_win_lose_odds::<1, 10>(
+        memoization_find_win_lose_odds::<T, 1, 10>(
             rule,
             player_sum,
             dealer_up_card,
@@ -193,50 +97,14 @@ fn memoization_find_win_lose_odds<const NEXT_CARD_MIN: u8, const NEXT_CARD_MAX: 
             dealer_extra_hand,
             odds,
         );
-        let next_state_odds = odds[dealer_extra_hand];
+        let next_state_odds = &odds[dealer_extra_hand] as *const T;
         dealer_extra_hand.remove_card(card);
 
         let p = ((original_shoe[card] - dealer_extra_hand[card]) as f64) / current_valid_shoe_total;
-        odds[dealer_extra_hand] += &(next_state_odds * p);
-    }
-}
-
-fn add_to_win_lose_cases_count(
-    player_sum: u16,
-    dealer_sum: u16,
-    count: &mut WinLoseCasesOdds,
-    delta: f64,
-) {
-    match player_sum.cmp(&dealer_sum) {
-        Ordering::Less => count.lose += delta,
-        Ordering::Equal => count.push += delta,
-        Ordering::Greater => count.win += delta,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::tests::get_typical_rule;
-    use super::*;
-
-    #[test]
-    #[ignore]
-    fn test_find_win_lose_cases_count() {
-        let rule = get_typical_rule();
-        let original_shoe = CardCount::new(&[0, 0, 1, 0, 0, 0, 1, 0, 0, 1]);
-        let mut dealer_extra_hand = CardCount::new(&[0; 10]);
-        let mut odds = SingleStateArray::new();
-        memoization_find_win_lose_odds::<1, 9>(
-            &rule,
-            &18,
-            &1,
-            &original_shoe,
-            &mut dealer_extra_hand,
-            &mut odds,
-        );
-
-        let od = odds[&CardCount::new(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0])];
-        println!("{:#?}", od);
-        println!("{:#?}", od.win + od.push + od.lose);
+        unsafe {
+            // Here, we know that we are referencing 2 different pieces of memory, but
+            // compilier doesn't know.
+            odds[dealer_extra_hand].add_assign_with_p(&*next_state_odds, p);
+        }
     }
 }

@@ -22,11 +22,11 @@ const fn get_powers_of_base() -> [u128; 10] {
 /// This struct provide a convenient way to use CardCount as the index of the
 /// array.
 #[derive(Debug, Default, Clone)]
-pub struct SingleStateArray<T: Copy + Default> {
+pub struct SingleStateArray<T: Default> {
     data: HashMap<u128, T>,
 }
 
-impl<T: Copy + Default> SingleStateArray<T> {
+impl<T: Default> SingleStateArray<T> {
     pub fn new() -> SingleStateArray<T> {
         SingleStateArray {
             data: HashMap::new(),
@@ -42,14 +42,14 @@ impl<T: Copy + Default> SingleStateArray<T> {
     }
 }
 
-impl<T: Copy + Default> Index<&CardCount> for SingleStateArray<T> {
+impl<T: Default> Index<&CardCount> for SingleStateArray<T> {
     type Output = T;
     fn index(&self, index: &CardCount) -> &Self::Output {
         &self.data[&index.hash_value]
     }
 }
 
-impl<T: Copy + Default> IndexMut<&CardCount> for SingleStateArray<T> {
+impl<T: Default> IndexMut<&CardCount> for SingleStateArray<T> {
     fn index_mut(&mut self, index: &CardCount) -> &mut Self::Output {
         if !self.data.contains_key(&index.hash_value) {
             self.data.insert(index.hash_value, Default::default());
@@ -62,11 +62,11 @@ impl<T: Copy + Default> IndexMut<&CardCount> for SingleStateArray<T> {
 /// This struct provide a convenient way to use 2 CardCount structs as the index of the
 /// array.
 #[derive(Debug, Default, Clone)]
-pub struct DoubleStateArray<T: Copy + Default> {
+pub struct DoubleStateArray<T: Default> {
     data: HashMap<u128, T>,
 }
 
-impl<T: Copy + Default> DoubleStateArray<T> {
+impl<T: Default> DoubleStateArray<T> {
     pub fn new() -> DoubleStateArray<T> {
         DoubleStateArray {
             data: HashMap::new(),
@@ -82,14 +82,14 @@ impl<T: Copy + Default> DoubleStateArray<T> {
     }
 }
 
-impl<T: Copy + Default> Index<DoubleCardCountIndex> for DoubleStateArray<T> {
+impl<T: Default> Index<DoubleCardCountIndex> for DoubleStateArray<T> {
     type Output = T;
     fn index(&self, index: DoubleCardCountIndex) -> &Self::Output {
         &self.data[&index.hash_value]
     }
 }
 
-impl<T: Copy + Default> IndexMut<DoubleCardCountIndex> for DoubleStateArray<T> {
+impl<T: Default> IndexMut<DoubleCardCountIndex> for DoubleStateArray<T> {
     fn index_mut(&mut self, index: DoubleCardCountIndex) -> &mut Self::Output {
         let hash = index.hash_value;
         if !self.data.contains_key(&hash) {

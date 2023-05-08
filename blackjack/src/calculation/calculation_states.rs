@@ -6,7 +6,7 @@ pub struct HandShoePair {
     pub shoe: CardCount,
 }
 
-pub fn gather_hand_count_states<F, T: Copy + Default>(
+pub fn gather_hand_count_states<F, T: Default>(
     initial_hand: &CardCount,
     initial_shoe: &CardCount,
     charlie_number: u8,
@@ -31,7 +31,7 @@ where
     ret
 }
 
-fn gather_hand_count_states_aux<F, T: Copy + Default>(
+fn gather_hand_count_states_aux<F, T: Default>(
     charlie_number: &u8,
     feature_fn: &mut F,
     record: &SingleStateArray<T>,

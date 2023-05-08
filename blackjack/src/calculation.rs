@@ -3,10 +3,12 @@ mod split_ex;
 mod stand_hit_ex;
 mod stand_odds;
 
+use std::mem::MaybeUninit;
+
 use super::{Decision, PeekPolicy, Rule};
 use crate::{CardCount, InitialSituation, SingleStateArray};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ExpectationStandHit {
     pub hit: f64,
     pub stand: f64,
@@ -41,7 +43,7 @@ pub fn get_max_expectation_of_stand_hit_surrender(
         }
     };
 
-    let ex = solution[state];
+    let ex = &solution[state];
     if max_ex < ex.stand {
         max_ex = ex.stand;
         max_decision = Decision::Stand;
@@ -74,7 +76,7 @@ pub struct SolutionForInitialSituation {
     pub ex_summary: f64,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 struct ExsOtherDecisions {
     ex_double: f64,
     ex_split: f64,
@@ -106,7 +108,18 @@ pub struct SolutionForBettingPhase {
 
 impl Default for SolutionForBettingPhase {
     fn default() -> Self {
-        let exs_other_decisions = [[Default::default(); 55]; 10];
+        // let exs_other_decisions = [[Default::default(); 55]; 10];
+        let exs_other_decisions = {
+            let mut outer_ar: [[MaybeUninit<ExsOtherDecisions>; 55]; 10] =
+                unsafe { MaybeUninit::uninit().assume_init() };
+            for inner_ar in outer_ar.iter_mut() {
+                for element in inner_ar.iter_mut() {
+                    *element = MaybeUninit::new(Default::default());
+                }
+            }
+
+            unsafe { std::mem::transmute(outer_ar) }
+        };
         SolutionForBettingPhase {
             exs_stand_hit: Default::default(),
             exs_other_decisions,
@@ -252,6 +265,7 @@ pub fn calculate_solution_without_initial_situation(
                     &mut solution.exs_stand_hit[idx10],
                 );
                 solution.exs_other_decisions[idx10][idx55] = ex_other;
+                let ex_other = &solution.exs_other_decisions[idx10][idx55];
                 solution.ex_total_summary += p * ex_other.ex_summary;
 
                 initial_situation.shoe.add_card(second_hand_card);

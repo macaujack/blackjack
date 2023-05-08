@@ -66,7 +66,7 @@ pub fn expectation_after_split_derive(input: TokenStream1) -> TokenStream1 {
             surrender: -f64::INFINITY,
         }
     };
-    let mut original_default_struct: syn::ExprStruct = syn::parse(default_struct.into()).unwrap();
+    let original_default_struct: syn::ExprStruct = syn::parse(default_struct.into()).unwrap();
     let mut cloned_default_struct = original_default_struct.clone();
     cloned_default_struct.fields.clear();
     for field in &original_default_struct.fields {
