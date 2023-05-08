@@ -1,6 +1,6 @@
 use super::calculation_states;
 use super::calculation_states::HandShoePair;
-use super::stand_odds::calculate_stand_odds;
+use super::stand_odds::calculate_stand_odds_single_hand;
 use super::{
     get_card_probability, get_max_expectation_of_stand_hit_surrender, ExpectationStandHit,
 };
@@ -87,8 +87,12 @@ pub fn multithreading_calculate_stand_hit_expectation(
         let rule = *rule;
         let thread = std::thread::spawn(move || {
             for pair in &pairs_for_thread {
-                let stand_odds =
-                    calculate_stand_odds(&rule, &pair.hand, &dealer_up_card, &pair.shoe);
+                let stand_odds = calculate_stand_odds_single_hand(
+                    &rule,
+                    &pair.hand,
+                    &dealer_up_card,
+                    &pair.shoe,
+                );
                 unsafe {
                     // This is OK, since the threads are not modifying the same memory.
                     let ex_stand_hit =
@@ -106,7 +110,8 @@ pub fn multithreading_calculate_stand_hit_expectation(
         threads.push(thread);
     }
     for pair in dispatched_hands.first().unwrap() {
-        let stand_odds = calculate_stand_odds(&rule, &pair.hand, &dealer_up_card, &pair.shoe);
+        let stand_odds =
+            calculate_stand_odds_single_hand(&rule, &pair.hand, &dealer_up_card, &pair.shoe);
         ex_stand_hit[&pair.hand].stand = {
             if pair.hand.is_natural() {
                 stand_odds.win * rule.payout_blackjack - stand_odds.lose
@@ -178,7 +183,8 @@ pub fn memoization_calculate_stand_hit_expectation(
 
     // Obvious case 3: Current actual sum is 21. Stand!
     if current_hand.get_actual_sum() == 21 {
-        let stand_odds = calculate_stand_odds(rule, current_hand, dealer_up_card, current_shoe);
+        let stand_odds =
+            calculate_stand_odds_single_hand(rule, current_hand, dealer_up_card, current_shoe);
 
         let stand = {
             if current_hand.is_natural() {
@@ -236,7 +242,8 @@ pub fn memoization_calculate_stand_hit_expectation(
         if current_hand.get_actual_sum() <= 11 && current_hand.get_total() != 3 {
             -f64::INFINITY
         } else {
-            let stand_odds = calculate_stand_odds(rule, current_hand, dealer_up_card, current_shoe);
+            let stand_odds =
+                calculate_stand_odds_single_hand(rule, current_hand, dealer_up_card, current_shoe);
             stand_odds.win - stand_odds.lose
         }
     };

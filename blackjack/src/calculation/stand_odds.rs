@@ -28,7 +28,7 @@ impl ops::Mul<f64> for WinLoseCasesOdds {
     }
 }
 
-pub fn calculate_stand_odds(
+pub fn calculate_stand_odds_single_hand(
     rule: &Rule,
     player_hand: &CardCount,
     dealer_up_card: &u8,
@@ -59,15 +59,46 @@ pub fn calculate_stand_odds(
     }
 
     let mut odds = SingleStateArray::new();
+    let (next_card_min, next_card_max) = match rule.peek_policy {
+        PeekPolicy::UpAceOrTen => match *dealer_up_card {
+            1 => (1, 9),
+            10 => (2, 10),
+            _ => (1, 10),
+        },
+        PeekPolicy::UpAce => match *dealer_up_card {
+            1 => (1, 9),
+            _ => (1, 10),
+        },
+        PeekPolicy::NoPeek => (1, 10),
+    };
 
-    memoization_find_win_lose_odds(
-        rule,
-        &player_sum,
-        dealer_up_card,
-        &shoe,
-        &mut dealer_extra_hand,
-        &mut odds,
-    );
+    match (next_card_min, next_card_max) {
+        (1, 10) => memoization_find_win_lose_odds::<1, 10>(
+            rule,
+            &player_sum,
+            dealer_up_card,
+            &shoe,
+            &mut dealer_extra_hand,
+            &mut odds,
+        ),
+        (1, 9) => memoization_find_win_lose_odds::<1, 9>(
+            rule,
+            &player_sum,
+            dealer_up_card,
+            &shoe,
+            &mut dealer_extra_hand,
+            &mut odds,
+        ),
+        (2, 10) => memoization_find_win_lose_odds::<2, 10>(
+            rule,
+            &player_sum,
+            dealer_up_card,
+            &shoe,
+            &mut dealer_extra_hand,
+            &mut odds,
+        ),
+        _ => panic!("Impossible to reach"),
+    }
 
     odds[&dealer_extra_hand]
 }
@@ -75,7 +106,7 @@ pub fn calculate_stand_odds(
 /// Note that the callers of this function must ensure that if player_sum is 21, it must NOT be
 /// a natural Blackjack. Player natural Blackjack should be handled separately as a special
 /// case before recursively calling this function.
-fn memoization_find_win_lose_odds(
+fn memoization_find_win_lose_odds<const NEXT_CARD_MIN: u8, const NEXT_CARD_MAX: u8>(
     // Input parameters
     rule: &Rule,
     player_sum: &u16,
@@ -137,43 +168,24 @@ fn memoization_find_win_lose_odds(
     }
 
     // Case 2: Dealer must hit.
-    let (next_card_min, next_card_max, current_valid_shoe_total) = {
-        if dealer_extra_hand.get_total() != 0 {
-            (
-                1,
-                10,
-                original_shoe.get_total() - dealer_extra_hand.get_total(),
-            )
+    let current_valid_shoe_total = original_shoe.get_total() - dealer_extra_hand.get_total() - {
+        if NEXT_CARD_MAX < 10 {
+            original_shoe[10]
+        } else if NEXT_CARD_MIN > 1 {
+            original_shoe[1]
         } else {
-            // Yes this is an ugly piece of code. If Rust supports 'fallthrough' in the pattern matching,
-            // the code can be much cleaner.
-            match rule.peek_policy {
-                PeekPolicy::UpAceOrTen => match *dealer_up_card {
-                    1 => (1, 9, original_shoe.get_total() - original_shoe[10]),
-                    10 => (2, 10, original_shoe.get_total() - original_shoe[1]),
-                    _ => (1, 10, original_shoe.get_total()),
-                },
-                PeekPolicy::UpAce => match *dealer_up_card {
-                    1 => (1, 9, original_shoe.get_total() - original_shoe[10]),
-                    _ => (1, 10, original_shoe.get_total()),
-                },
-                PeekPolicy::NoPeek => (
-                    1,
-                    10,
-                    original_shoe.get_total() - dealer_extra_hand.get_total(),
-                ),
-            }
+            0
         }
     };
     let current_valid_shoe_total = current_valid_shoe_total as f64;
 
-    for card in next_card_min..=next_card_max {
+    for card in NEXT_CARD_MIN..=NEXT_CARD_MAX {
         if dealer_extra_hand[card] == original_shoe[card] {
             continue;
         }
 
         dealer_extra_hand.add_card(card);
-        memoization_find_win_lose_odds(
+        memoization_find_win_lose_odds::<1, 10>(
             rule,
             player_sum,
             dealer_up_card,
@@ -214,7 +226,7 @@ mod tests {
         let original_shoe = CardCount::new(&[0, 0, 1, 0, 0, 0, 1, 0, 0, 1]);
         let mut dealer_extra_hand = CardCount::new(&[0; 10]);
         let mut odds = SingleStateArray::new();
-        memoization_find_win_lose_odds(
+        memoization_find_win_lose_odds::<1, 9>(
             &rule,
             &18,
             &1,
