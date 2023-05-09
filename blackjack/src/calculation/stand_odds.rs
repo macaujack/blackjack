@@ -25,16 +25,16 @@ pub fn memoization_dealer_get_cards<
     rule: &Rule,
     player_sum: &u16,
     dealer_up_card: &u8,
-    original_shoe: &CardCount, // Original cards in the shoe just before dealer's hole card is revealed
 
     // Parameters to maintain current state
+    current_shoe: &mut CardCount, // Current shoe, propably including dealer hole card.
     dealer_extra_hand: &mut CardCount, // Dealer's hand except for the up card
     odds: &mut SingleStateArray<T>,
 ) {
-    if odds.contains_state(dealer_extra_hand) {
+    if odds.contains_state(&current_shoe) {
         return;
     }
-    odds[dealer_extra_hand] = Default::default();
+    odds[current_shoe] = Default::default();
 
     // Case 1: Dealer must stand.
     let dealer_sum = dealer_extra_hand.get_sum() + (*dealer_up_card as u16);
@@ -72,11 +72,11 @@ pub fn memoization_dealer_get_cards<
     }
 
     // Case 2: Dealer must hit.
-    let current_valid_shoe_total = original_shoe.get_total() - dealer_extra_hand.get_total() - {
+    let current_valid_shoe_total = current_shoe.get_total() - {
         if NEXT_CARD_MAX < 10 {
-            original_shoe[10]
+            current_shoe[10]
         } else if NEXT_CARD_MIN > 1 {
-            original_shoe[1]
+            current_shoe[1]
         } else {
             0
         }
@@ -84,23 +84,25 @@ pub fn memoization_dealer_get_cards<
     let current_valid_shoe_total = current_valid_shoe_total as f64;
 
     for card in NEXT_CARD_MIN..=NEXT_CARD_MAX {
-        if dealer_extra_hand[card] == original_shoe[card] {
+        if current_shoe[card] == 0 {
             continue;
         }
 
+        current_shoe.remove_card(card);
         dealer_extra_hand.add_card(card);
         memoization_dealer_get_cards::<T, 1, 10>(
             rule,
             player_sum,
             dealer_up_card,
-            original_shoe,
+            current_shoe,
             dealer_extra_hand,
             odds,
         );
         let next_state_odds = &odds[dealer_extra_hand] as *const T;
         dealer_extra_hand.remove_card(card);
+        current_shoe.add_card(card);
 
-        let p = ((original_shoe[card] - dealer_extra_hand[card]) as f64) / current_valid_shoe_total;
+        let p = (current_shoe[card] as f64) / current_valid_shoe_total;
         unsafe {
             // Here, we know that we are referencing 2 different pieces of memory, but
             // compilier doesn't know.

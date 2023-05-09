@@ -84,15 +84,15 @@ pub fn multithreading_calculate_stand_hit_expectation(
     let mut threads = Vec::with_capacity(number_of_threads - 1);
     let raw_ex_stand_hit = ex_stand_hit as *mut SingleStateArray<ExpectationStandHit> as usize;
     for _ in 1..number_of_threads {
-        let pairs_for_thread = dispatched_hands.pop().unwrap();
+        let mut pairs_for_thread = dispatched_hands.pop().unwrap();
         let rule = *rule;
         let thread = std::thread::spawn(move || {
-            for pair in &pairs_for_thread {
+            for pair in pairs_for_thread.iter_mut() {
                 let stand_odds = calculate_stand_odds_single_hand(
                     &rule,
                     &pair.hand,
                     &dealer_up_card,
-                    &pair.shoe,
+                    &mut pair.shoe,
                 );
                 unsafe {
                     // This is OK, since the threads are not modifying the same memory.
@@ -110,9 +110,10 @@ pub fn multithreading_calculate_stand_hit_expectation(
         });
         threads.push(thread);
     }
-    for pair in dispatched_hands.first().unwrap() {
+    let mut first_dispatched_hands = dispatched_hands.pop().unwrap();
+    for pair in first_dispatched_hands.iter_mut() {
         let stand_odds =
-            calculate_stand_odds_single_hand(&rule, &pair.hand, &dealer_up_card, &pair.shoe);
+            calculate_stand_odds_single_hand(&rule, &pair.hand, &dealer_up_card, &mut pair.shoe);
         ex_stand_hit[&pair.hand].stand = {
             if pair.hand.is_natural() {
                 stand_odds.win * rule.payout_blackjack - stand_odds.lose
@@ -286,7 +287,7 @@ fn calculate_stand_odds_single_hand(
     rule: &Rule,
     player_hand: &CardCount,
     dealer_up_card: &u8,
-    shoe: &CardCount,
+    shoe: &mut CardCount,
 ) -> WinLoseCasesOdds {
     let mut dealer_extra_hand = CardCount::new(&[0; 10]);
     let player_sum = player_hand.get_actual_sum();
@@ -330,7 +331,7 @@ fn calculate_stand_odds_single_hand(
             rule,
             &player_sum,
             dealer_up_card,
-            &shoe,
+            shoe,
             &mut dealer_extra_hand,
             &mut odds,
         ),
@@ -338,7 +339,7 @@ fn calculate_stand_odds_single_hand(
             rule,
             &player_sum,
             dealer_up_card,
-            &shoe,
+            shoe,
             &mut dealer_extra_hand,
             &mut odds,
         ),
@@ -346,7 +347,7 @@ fn calculate_stand_odds_single_hand(
             rule,
             &player_sum,
             dealer_up_card,
-            &shoe,
+            shoe,
             &mut dealer_extra_hand,
             &mut odds,
         ),
@@ -365,14 +366,14 @@ mod tests {
     #[ignore]
     fn test_find_win_lose_cases_count() {
         let rule = get_typical_rule();
-        let original_shoe = CardCount::new(&[0, 0, 1, 0, 0, 0, 1, 0, 0, 1]);
+        let mut original_shoe = CardCount::new(&[0, 0, 1, 0, 0, 0, 1, 0, 0, 1]);
         let mut dealer_extra_hand = CardCount::new(&[0; 10]);
         let mut odds = SingleStateArray::new();
         memoization_dealer_get_cards::<WinLoseCasesOdds, 1, 9>(
             &rule,
             &18,
             &1,
-            &original_shoe,
+            &mut original_shoe,
             &mut dealer_extra_hand,
             &mut odds,
         );
