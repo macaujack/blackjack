@@ -82,8 +82,8 @@ impl Strategy for DpStrategySinglePlayer {
                 mx_ex = self.solution_small.ex_double;
                 decision = Decision::Double;
             }
-            if mx_ex < self.solution_small.ex_split {
-                mx_ex = self.solution_small.ex_split;
+            if mx_ex < self.solution_small.ex_split_result {
+                mx_ex = self.solution_small.ex_split_result;
                 decision = Decision::Split;
             }
         }

@@ -5,8 +5,13 @@ mod stand_odds;
 
 use std::mem::MaybeUninit;
 
+use self::split_ex::{DealerHandValueProbability, ExpectationAfterSplit, ExpectationSH};
+
 use super::{Decision, PeekPolicy, Rule};
-use crate::{CardCount, InitialSituation, SingleStateArray};
+use crate::{
+    CardCount, DoubleCardCountIndex, DoubleStateArray, HandState, InitialSituation,
+    SingleStateArray,
+};
 
 #[derive(Clone, Debug)]
 pub struct ExpectationStandHit {
@@ -59,8 +64,9 @@ pub fn get_max_expectation_of_stand_hit_surrender(
 #[derive(Debug, Default)]
 pub struct SolutionForInitialSituation {
     pub ex_stand_hit: SingleStateArray<ExpectationStandHit>,
+    pub ex_split: DoubleStateArray<ExpectationSH>,
     pub ex_double: f64,
-    pub ex_split: f64,
+    pub ex_split_result: f64,
 
     /// Represents the expectation of the side bet "Buy Insurance". There is no relation between this side
     /// bet and the main game. If this expectation is positive, players should buy insurance.
@@ -79,7 +85,7 @@ pub struct SolutionForInitialSituation {
 #[derive(Debug, Default, Clone)]
 struct ExsOtherDecisions {
     ex_double: f64,
-    ex_split: f64,
+    ex_split_result: f64,
 
     ex_extra_insurance: f64,
 
@@ -102,6 +108,7 @@ static PREFIX_SUM: [usize; 10] = get_prefix_sum();
 #[derive(Debug)]
 pub struct SolutionForBettingPhase {
     exs_stand_hit: [SingleStateArray<ExpectationStandHit>; 10],
+    exs_split: [DoubleStateArray<ExpectationSH>; 10],
     exs_other_decisions: [[ExsOtherDecisions; 55]; 10],
     ex_total_summary: f64,
 }
@@ -122,6 +129,7 @@ impl Default for SolutionForBettingPhase {
         };
         SolutionForBettingPhase {
             exs_stand_hit: Default::default(),
+            exs_split: Default::default(),
             exs_other_decisions,
             ex_total_summary: Default::default(),
         }
@@ -136,6 +144,7 @@ impl SolutionForBettingPhase {
     ) -> SolutionForInitialSituation {
         let mut sol = self.get_solution_for_initial_situation_aux(hand, dealer_up_card);
         sol.ex_stand_hit = core::mem::take(&mut self.exs_stand_hit[(dealer_up_card - 1) as usize]);
+        sol.ex_split = core::mem::take(&mut self.exs_split[(dealer_up_card - 1) as usize]);
         sol
     }
 
@@ -146,6 +155,7 @@ impl SolutionForBettingPhase {
     ) -> SolutionForInitialSituation {
         let mut sol = self.get_solution_for_initial_situation_aux(hand, dealer_up_card);
         sol.ex_stand_hit = self.exs_stand_hit[(dealer_up_card - 1) as usize].clone();
+        sol.ex_split = self.exs_split[(dealer_up_card - 1) as usize].clone();
         sol
     }
 
@@ -165,10 +175,12 @@ impl SolutionForBettingPhase {
         let b = (hand.1 - 1) as usize;
         let d = (dealer_up_card - 1) as usize;
         let other = &self.exs_other_decisions[d][PREFIX_SUM[a] + b];
+
         SolutionForInitialSituation {
             ex_stand_hit: Default::default(),
+            ex_split: Default::default(),
             ex_double: other.ex_double,
-            ex_split: other.ex_split,
+            ex_split_result: other.ex_split_result,
             ex_extra_insurance: other.ex_extra_insurance,
             ex_summary: other.ex_summary,
         }
@@ -263,6 +275,7 @@ pub fn calculate_solution_without_initial_situation(
                     rule,
                     &initial_situation,
                     &mut solution.exs_stand_hit[idx10],
+                    &mut solution.exs_split[idx10],
                 );
                 solution.exs_other_decisions[idx10][idx55] = ex_other;
                 let ex_other = &solution.exs_other_decisions[idx10][idx55];
@@ -286,6 +299,7 @@ pub fn calculate_solution_with_initial_situation(
 ) -> SolutionForInitialSituation {
     let number_of_threads = get_number_of_threads(number_of_threads);
     let mut ex_stand_hit = SingleStateArray::new();
+    let mut ex_split = DoubleStateArray::new();
 
     // Calculate expectation of Stand and Hit.
     let exs_other = calculate_expectations(
@@ -293,19 +307,22 @@ pub fn calculate_solution_with_initial_situation(
         rule,
         initial_situation,
         &mut ex_stand_hit,
+        &mut ex_split,
     );
 
     // TODO: Calculate the expectation when able to split.
     SolutionForInitialSituation {
         ex_stand_hit,
+        ex_split,
         ex_double: exs_other.ex_double,
-        ex_split: exs_other.ex_split,
+        ex_split_result: exs_other.ex_split_result,
         ex_extra_insurance: exs_other.ex_extra_insurance,
         ex_summary: exs_other.ex_summary,
     }
 }
 
 // Updates the expectations of Stand and Hit in the input parameter ex_stand_hit.
+// Updates the expectations of Split in the input parameter ex_split.
 // Returns the expectations of other decisions in the return value.
 // If the given number_of_threads is 0, the function will use
 // std::thread::available_parallelism to get the threads.
@@ -314,6 +331,7 @@ fn calculate_expectations(
     rule: &Rule,
     initial_situation: &InitialSituation,
     ex_stand_hit: &mut SingleStateArray<ExpectationStandHit>,
+    ex_split: &mut DoubleStateArray<ExpectationSH>,
 ) -> ExsOtherDecisions {
     let mut initial_hand = CardCount::with_number_of_decks(0);
     initial_hand.add_card(initial_situation.hand_cards.0);
@@ -342,6 +360,59 @@ fn calculate_expectations(
             &initial_hand,
             ex_stand_hit,
         );
+
+        // TODO: Calculate Split with multi-threading.
+    }
+
+    if initial_situation.hand_cards.0 == initial_situation.hand_cards.1 {
+        let mut dealer_hand_ps: SingleStateArray<SingleStateArray<DealerHandValueProbability>> =
+            SingleStateArray::new();
+        split_ex::calculate_split_expectation(
+            rule,
+            &initial_situation.dealer_up_card,
+            &impossible_dealer_hole_card,
+            &mut shoe,
+            &initial_hand,
+            ex_split,
+            &mut dealer_hand_ps,
+        );
+        // TODO: Delete debug
+        loop {
+            println!("Input: ");
+            let mut line = String::new();
+            std::io::stdin()
+                .read_line(&mut line)
+                .expect("Failed to read line");
+
+            let inputs: Vec<u8> = line
+                .split_whitespace()
+                .map(|x| x.parse().expect("Not an integer!"))
+                .collect();
+
+            let mut hand0 = CardCount::with_number_of_decks(0);
+            let mut hand1 = CardCount::with_number_of_decks(0);
+            let mut hand = &mut hand0;
+            let mut hand_state0 = HandState::PlaceHolder;
+            for input in inputs {
+                match input {
+                    1..=10 => hand.add_card(input),
+                    0 => {
+                        hand = &mut hand1;
+                        hand_state0 = HandState::PlaceHolder;
+                    }
+                    11 => {
+                        hand = &mut hand1;
+                        hand_state0 = HandState::Normal;
+                    }
+                    _ => {
+                        println!("Invalid input");
+                        continue;
+                    }
+                }
+            }
+            let state_array_index = DoubleCardCountIndex::new(&hand0, hand_state0, &hand1);
+            println!("{:#?}", &ex_split[state_array_index]);
+        }
     }
 
     // Calculate expectation of Double.
@@ -364,7 +435,39 @@ fn calculate_expectations(
         }
     };
 
-    // TODO: Calculate expectation of Split
+    // Calculate expectation of Split
+    let ex_split_result = {
+        if initial_situation.hand_cards.0 != initial_situation.hand_cards.1 {
+            -f64::INFINITY
+        } else {
+            let mut current_shoe = initial_situation.shoe.clone();
+            let mut ex_split_result = 0.0;
+            let mut hand0 = CardCount::with_number_of_decks(0);
+            hand0.add_card(initial_situation.hand_cards.0);
+            let mut hand1 = CardCount::with_number_of_decks(0);
+            hand1.add_card(initial_situation.hand_cards.1);
+            for card0 in 1..=10 {
+                current_shoe.remove_card(card0);
+                hand0.add_card(card0);
+                let p0 = get_card_probability(&current_shoe, impossible_dealer_hole_card, card0);
+                for card1 in 1..=10 {
+                    hand1.add_card(card1);
+
+                    let state_array_index =
+                        DoubleCardCountIndex::new(&hand0, HandState::PlaceHolder, &hand1);
+                    let p = get_card_probability(&current_shoe, impossible_dealer_hole_card, card1);
+                    let p = p0 * p;
+                    ex_split_result += p * ex_split[state_array_index].get_max_expectation().0;
+
+                    hand1.remove_card(card1);
+                }
+                hand0.remove_card(card0);
+                current_shoe.add_card(card0);
+            }
+
+            ex_split_result
+        }
+    };
 
     // Calculate extra expectation of side bet "Buy Insurance".
     let p_early_end = {
@@ -401,7 +504,7 @@ fn calculate_expectations(
 
     ExsOtherDecisions {
         ex_double,
-        ex_split: -f64::INFINITY,
+        ex_split_result,
         ex_extra_insurance,
         ex_summary,
     }

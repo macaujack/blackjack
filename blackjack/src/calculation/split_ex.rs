@@ -56,7 +56,7 @@ pub fn calculate_split_expectation<T: ExpectationAfterSplit + Default>(
 
     // Output parameters
     ex: &mut DoubleStateArray<T>,
-    dealer_hand_p: &mut SingleStateArray<DealerHandValueProbability>,
+    dealer_hand_p: &mut SingleStateArray<SingleStateArray<DealerHandValueProbability>>,
 ) {
     let card_value = current_hand.get_sum() as u8 / 2;
     let mut current_hand0 = CardCount::with_number_of_decks(0);
@@ -109,7 +109,7 @@ fn memoization_calculate_split_expectation_aux0<
 
     // Output parameters
     ex: &mut DoubleStateArray<T>,
-    dealer_hand_p: &mut SingleStateArray<DealerHandValueProbability>,
+    dealer_hand_ps: &mut SingleStateArray<SingleStateArray<DealerHandValueProbability>>,
 ) {
     let state_array_index =
         DoubleCardCountIndex::new(current_hand0, HandState::PlaceHolder, current_hand1);
@@ -133,7 +133,7 @@ fn memoization_calculate_split_expectation_aux0<
             &HandState::Normal,
             current_hand1,
             ex,
-            dealer_hand_p,
+            dealer_hand_ps,
         );
         let next_index = DoubleCardCountIndex::new(current_hand0, HandState::Normal, current_hand1);
         let max_ex = ex[next_index].get_max_expectation().0;
@@ -168,7 +168,7 @@ fn memoization_calculate_split_expectation_aux0<
             current_hand0,
             current_hand1,
             ex,
-            dealer_hand_p,
+            dealer_hand_ps,
         );
         let next_index =
             DoubleCardCountIndex::new(current_hand0, HandState::PlaceHolder, current_hand1);
@@ -193,7 +193,7 @@ fn memoization_calculate_split_expectation_aux0<
             &HandState::Surrender,
             current_hand1,
             ex,
-            dealer_hand_p,
+            dealer_hand_ps,
         );
         let next_index =
             DoubleCardCountIndex::new(current_hand0, HandState::Surrender, current_hand1);
@@ -225,7 +225,7 @@ fn memoization_calculate_split_expectation_aux0<
                 &HandState::Double,
                 current_hand1,
                 ex,
-                dealer_hand_p,
+                dealer_hand_ps,
             );
             let next_index =
                 DoubleCardCountIndex::new(current_hand0, HandState::Double, current_hand1);
@@ -259,10 +259,9 @@ fn memoization_calculate_split_expectation_aux1<
 
     // Output parameters
     ex: &mut DoubleStateArray<T>,
-    dealer_hand_p: &mut SingleStateArray<DealerHandValueProbability>,
+    dealer_hand_ps: &mut SingleStateArray<SingleStateArray<DealerHandValueProbability>>,
 ) {
-    let state_array_index =
-        DoubleCardCountIndex::new(current_hand0, HandState::PlaceHolder, current_hand1);
+    let state_array_index = DoubleCardCountIndex::new(current_hand0, *hand_state0, current_hand1);
 
     if ex.contains_state(state_array_index) {
         return;
@@ -309,11 +308,11 @@ fn memoization_calculate_split_expectation_aux1<
             hand_state0,
             current_hand1,
             ex,
-            dealer_hand_p,
+            dealer_hand_ps,
         );
     }
     // Obvious case. In this case, we can only stand and must stand.
-    if current_hand1.get_actual_sum() == 21 {
+    if can_optimize_stand1 || current_hand1.get_actual_sum() == 21 {
         return;
     }
 
@@ -336,10 +335,9 @@ fn memoization_calculate_split_expectation_aux1<
             hand_state0,
             current_hand1,
             ex,
-            dealer_hand_p,
+            dealer_hand_ps,
         );
-        let next_index =
-            DoubleCardCountIndex::new(current_hand0, HandState::PlaceHolder, current_hand1);
+        let next_index = DoubleCardCountIndex::new(current_hand0, *hand_state0, current_hand1);
         let max_ex = ex[next_index].get_max_expectation().0;
 
         current_hand1.remove_card(card_value);
@@ -365,7 +363,7 @@ fn memoization_calculate_split_expectation_aux1<
             hand_state0,
             current_hand1,
             ex,
-            dealer_hand_p,
+            dealer_hand_ps,
         );
     }
 
@@ -393,10 +391,9 @@ fn memoization_calculate_split_expectation_aux1<
                 hand_state0,
                 current_hand1,
                 ex,
-                dealer_hand_p,
+                dealer_hand_ps,
             );
-            let next_index =
-                DoubleCardCountIndex::new(current_hand0, HandState::Double, current_hand1);
+            let next_index = DoubleCardCountIndex::new(current_hand0, *hand_state0, current_hand1);
             let max_ex = ex[next_index].get_max_expectation().0;
 
             current_hand1.remove_card(card_value);
@@ -430,27 +427,26 @@ fn memoization_calculate_split_expectation_aux2<
 
     // Output parameters
     ex: &mut DoubleStateArray<T>,
-    dealer_hand_p: &mut SingleStateArray<DealerHandValueProbability>,
+    dealer_hand_ps: &mut SingleStateArray<SingleStateArray<DealerHandValueProbability>>,
 ) {
     let state_array_index = DoubleCardCountIndex::new(current_hand0, *hand_state0, current_hand1);
-    if ex.contains_state(state_array_index) {
-        return;
-    }
-    ex[state_array_index] = Default::default();
 
     let mut dealer_extra_hand = CardCount::with_number_of_decks(0);
-    memoization_dealer_get_cards::<
-        DealerHandValueProbability,
-        DEALER_HOLE_CARD_MIN,
-        DEALER_HOLE_CARD_MAX,
-    >(
-        rule,
-        &0,
-        dealer_up_card,
-        current_shoe,
-        &mut dealer_extra_hand,
-        dealer_hand_p,
-    );
+    if !dealer_hand_ps.contains_state(current_shoe) {
+        dealer_hand_ps[current_shoe] = Default::default();
+        memoization_dealer_get_cards::<
+            DealerHandValueProbability,
+            DEALER_HOLE_CARD_MIN,
+            DEALER_HOLE_CARD_MAX,
+        >(
+            rule,
+            &0,
+            dealer_up_card,
+            current_shoe,
+            &mut dealer_extra_hand,
+            &mut dealer_hand_ps[current_shoe],
+        );
+    }
 
     let hand_state1 = &match HAND_STATE1 {
         1 => HandState::Normal,
@@ -459,7 +455,7 @@ fn memoization_calculate_split_expectation_aux2<
         _ => panic!("Impossible to reach"),
     };
 
-    let dealer_odds = &dealer_hand_p[current_shoe];
+    let dealer_odds = &dealer_hand_ps[current_shoe][&dealer_extra_hand];
     let ex0 = calculate_expectation_for_one_hand(rule, current_hand0, hand_state0, dealer_odds);
     let ex1 = calculate_expectation_for_one_hand(rule, current_hand1, hand_state1, dealer_odds);
     let ex_sum = ex0 + ex1;
@@ -486,11 +482,9 @@ fn calculate_expectation_for_one_hand(
     if hand_cards.get_total() == rule.charlie_number as u16 {
         return 1.0;
     }
-    let player_actual_sum = hand_cards.get_actual_sum() as usize;
-    let p_win: f64 = dealer_odds.probabilities[0..player_actual_sum].iter().sum();
-    let p_lose: f64 = dealer_odds.probabilities[player_actual_sum + 1..=22]
-        .iter()
-        .sum();
+    let player_actual_sum = hand_cards.get_actual_sum();
+    let p_win: f64 = dealer_odds.p_worse_than_player(player_actual_sum);
+    let p_lose: f64 = dealer_odds.p_better_than_player(player_actual_sum);
     let mut ret = p_win - p_lose;
 
     if *hand_state == HandState::Double {
@@ -502,25 +496,50 @@ fn calculate_expectation_for_one_hand(
 
 #[derive(Debug, Clone, Default)]
 pub struct DealerHandValueProbability {
-    probabilities: [f64; 23],
+    // 0 for Bust.
+    // [1, 5] for [17, 21].
+    // Probability of natural Blackjack = 1.0 - probabilies_prefix_sum[5].
+    probabilities_prefix_sum: [f64; 6],
+}
+
+impl DealerHandValueProbability {
+    pub fn p_worse_than_player(&self, player_actual_sum: u16) -> f64 {
+        let x = player_actual_sum as usize;
+        match x {
+            0..=17 => self.probabilities_prefix_sum[0],
+            18..=21 => self.probabilities_prefix_sum[x - 17],
+            _ => panic!("Impossible to reach"),
+        }
+    }
+
+    pub fn p_better_than_player(&self, player_actual_sum: u16) -> f64 {
+        let x = player_actual_sum as usize;
+        match x {
+            0..=16 => 1.0 - self.probabilities_prefix_sum[0],
+            17..=21 => 1.0 - self.probabilities_prefix_sum[x - 16],
+            _ => panic!("Impossible to reach"),
+        }
+    }
 }
 
 impl DealerHandHandler for DealerHandValueProbability {
     fn end_with_dealer_bust(&mut self) {
-        self.probabilities[0] = 1.0;
+        for p in self.probabilities_prefix_sum.iter_mut() {
+            *p = 1.0;
+        }
     }
 
     fn end_with_dealer_normal(&mut self, dealer_actual_sum: u16, _: u16) {
-        self.probabilities[dealer_actual_sum as usize] = 1.0;
+        for i in (dealer_actual_sum - 16) as usize..self.probabilities_prefix_sum.len() {
+            self.probabilities_prefix_sum[i] = 1.0;
+        }
     }
 
-    fn end_with_dealer_natural(&mut self) {
-        self.probabilities[22] = 1.0;
-    }
+    fn end_with_dealer_natural(&mut self) {}
 
     fn add_assign_with_p(&mut self, rhs: &Self, p: f64) {
-        for i in 0..self.probabilities.len() {
-            self.probabilities[i] += rhs.probabilities[i] * p;
+        for i in 0..self.probabilities_prefix_sum.len() {
+            self.probabilities_prefix_sum[i] += rhs.probabilities_prefix_sum[i] * p;
         }
     }
 }
