@@ -1,9 +1,13 @@
 pub mod hand;
 pub mod shoe;
 
-use crate::{CardCount, InitialSituation, PeekPolicy, Rule};
+use crate::{
+    strategy::Strategy, CardCount, Decision, HandState, InitialSituation, PeekPolicy, Rule,
+};
 use blackjack_macros::allowed_phase;
 use strum_macros::EnumIter;
+
+use self::{hand::Hand, shoe::Shoe};
 
 static FACE_VALUE_TO_BLACKJACK_VALUE: [u8; 13] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10];
 const MAX_PLAYER: u8 = 10;
@@ -170,6 +174,102 @@ impl Simulator {
         Ok(())
     }
 
+    /// This will perform automatic simulation according to given strategy and event handler.
+    /// Can be called at PlaceBets phase.
+    #[allowed_phase(PlaceBets)]
+    pub fn automatic_simulate_with_fixed_main_bet<T: Strategy, U: SimulatorEventHandler>(
+        &mut self,
+        main_bet: u32,
+        strategy: &mut T,
+        handler: &mut U,
+    ) -> Result<(), String> {
+        handler.on_game_begin(&self.shoe);
+
+        self.place_bets(main_bet)?;
+        handler.on_bet_money(main_bet);
+
+        let initial_situation = self.deal_initial_cards()?;
+        handler.on_deal_cards(&initial_situation);
+
+        let dealer_cards = self.dealer_hand.get_cards(0);
+        let dealer_peeks_and_gets_natural = {
+            let up = dealer_cards[0].blackjack_value();
+            let dealer_will_peek = match self.rule.peek_policy {
+                PeekPolicy::UpAceOrTen => up == 1 || up == 10,
+                PeekPolicy::UpAce => up == 1,
+                PeekPolicy::NoPeek => false,
+            };
+            if dealer_will_peek {
+                let buy_insurance = strategy.should_buy_insurance(&self.rule, &initial_situation);
+                let insurance_bet = {
+                    if buy_insurance {
+                        main_bet / 2
+                    } else {
+                        0
+                    }
+                };
+                handler.on_buy_insurance(insurance_bet);
+                let dealer_gets_natural = self.dealer_peeks(buy_insurance)?;
+                dealer_gets_natural
+            } else {
+                false
+            }
+        };
+
+        if !dealer_peeks_and_gets_natural {
+            self.wait_for_right_players()?;
+
+            let split_time_limit = {
+                let dealer_cards = self.dealer_hand.get_cards(0);
+                if dealer_cards[0].blackjack_value() == dealer_cards[1].blackjack_value() {
+                    if dealer_cards[0].blackjack_value() == 1 {
+                        self.rule.split_ace_limits
+                    } else {
+                        self.rule.split_all_limits
+                    }
+                } else {
+                    0
+                }
+            };
+            for _ in 0..split_time_limit {
+                let hand_groups = self.get_all_card_counts();
+                let group_index = strategy.should_split(
+                    &self.rule,
+                    self.get_shoe_card_count(),
+                    initial_situation.dealer_up_card,
+                    &hand_groups,
+                );
+
+                if group_index.is_none() {
+                    break;
+                }
+                let group_index = group_index.unwrap();
+                self.play_split(group_index)?;
+                handler.on_split(&self.current_hand);
+            }
+            self.stop_split()?;
+
+            if self.current_split_ace_times == 0 {
+                if self.current_split_all_times == 0 {
+                    self.loop_make_decisions_single(strategy, handler);
+                } else {
+                    self.loop_make_decisions_multiple(strategy, handler);
+                }
+            }
+
+            self.wait_for_left_players()?;
+        } else {
+            handler.on_game_early_end();
+        }
+
+        let returned_money = self.dealer_plays_and_summary()?;
+        handler.on_summary_game(&self.current_hand, &self.dealer_hand, returned_money);
+
+        self.start_new_shoe_if_necessary()?;
+
+        Ok(())
+    }
+
     /// Can be called at PlaceBets phase.
     /// Place 0 bet to indicate not to place any bet this time.
     #[allowed_phase(PlaceBets)]
@@ -245,10 +345,16 @@ impl Simulator {
             return Ok(false);
         }
 
+        self.dealer_peeks(buy_insurance)
+    }
+
+    fn dealer_peeks(&mut self, buy_insurance: bool) -> Result<bool, String> {
         if buy_insurance {
             self.insurance_bet = self.current_hand.get_bet(0) / 2;
         }
 
+        let dealer_cards = self.dealer_hand.get_cards(0);
+        let up = dealer_cards[0].blackjack_value();
         let hole = dealer_cards[1].blackjack_value();
         let dealer_is_natural = up + hole == 11;
         if dealer_is_natural {
@@ -501,6 +607,15 @@ impl Simulator {
         self.shoe.preview_next_few_cards(number)
     }
 
+    pub fn get_all_card_counts(&self) -> Vec<&CardCount> {
+        let mut hand_groups: Vec<&CardCount> = Vec::with_capacity(self.get_number_of_groups());
+        for i in 0..self.get_number_of_groups() {
+            let hand_group = self.current_hand.get_card_counts(i);
+            hand_groups.push(hand_group);
+        }
+        hand_groups
+    }
+
     fn receive_card_for_me(&mut self, card: Card) {
         self.current_hand
             .receive_card(self.current_playing_group_index, card);
@@ -531,6 +646,106 @@ impl Simulator {
         self.current_hand.clear();
         self.insurance_bet = 0;
     }
+
+    fn loop_make_decisions_single<T: Strategy, U: SimulatorEventHandler>(
+        &mut self,
+        strategy: &mut T,
+        handler: &mut U,
+    ) {
+        loop {
+            let current_hand = self.get_my_current_card_count();
+            let decision = strategy.make_decision_single(&self.rule, current_hand);
+            handler.on_make_decision(decision, 0);
+            let finished = match decision {
+                Decision::Stand => self.play_stand().unwrap(),
+                Decision::Hit => {
+                    let finished = self.play_hit().unwrap();
+                    self.check_bust_or_charlie(handler, 0);
+                    finished
+                }
+                Decision::Double => {
+                    let finished = self.play_double().unwrap();
+                    self.check_bust_or_charlie(handler, 0);
+                    finished
+                }
+                Decision::Surrender => self.play_surrender().unwrap(),
+                _ => panic!("Invalid decision!"),
+            };
+
+            if finished {
+                break;
+            }
+        }
+    }
+
+    fn loop_make_decisions_multiple<T: Strategy, U: SimulatorEventHandler>(
+        &mut self,
+        strategy: &mut T,
+        handler: &mut U,
+    ) {
+        let mut hand_states: Vec<HandState> = Vec::with_capacity(self.get_number_of_groups() - 1);
+        for group_index in 0..self.get_number_of_groups() {
+            loop {
+                let current_hands = self.get_all_card_counts();
+                let decision =
+                    strategy.make_decision_multiple(&self.rule, &current_hands, &hand_states);
+                handler.on_make_decision(decision, group_index);
+                let finished = match decision {
+                    Decision::Stand => {
+                        self.play_stand().unwrap();
+                        hand_states.push(HandState::Normal);
+                        true
+                    }
+                    Decision::Hit => {
+                        let finished = self.play_hit().unwrap();
+                        if finished {
+                            hand_states.push(HandState::Normal);
+                            self.check_bust_or_charlie(handler, group_index);
+                        }
+                        finished
+                    }
+                    Decision::Double => {
+                        self.play_double().unwrap();
+                        hand_states.push(HandState::Double);
+                        self.check_bust_or_charlie(handler, group_index);
+                        true
+                    }
+                    Decision::Surrender => {
+                        self.play_surrender().unwrap();
+                        hand_states.push(HandState::Surrender);
+                        true
+                    }
+                    _ => panic!("Invalid decision!"),
+                };
+
+                if finished {
+                    break;
+                }
+            }
+        }
+    }
+
+    fn check_bust_or_charlie<U: SimulatorEventHandler>(&self, handler: &mut U, group_index: usize) {
+        let current_hand = self.current_hand.get_card_counts(group_index);
+        if current_hand.bust() {
+            handler.on_player_bust(group_index);
+        } else if current_hand.get_total() == self.rule.charlie_number as u16 {
+            handler.on_player_charlie(group_index);
+        }
+    }
+}
+
+pub trait SimulatorEventHandler {
+    fn on_game_begin(&mut self, shoe: &Shoe);
+    fn on_bet_money(&mut self, bet: u32);
+    fn on_deal_cards(&mut self, initial_situation: &InitialSituation);
+    fn on_buy_insurance(&mut self, insurace_bet: u32);
+    fn on_game_early_end(&mut self);
+    fn on_split(&mut self, player_hand: &Hand);
+    fn on_make_decision(&mut self, decision: Decision, group_index: usize);
+    fn on_player_bust(&mut self, group_index: usize);
+    fn on_player_charlie(&mut self, group_index: usize);
+    fn on_summary_game(&mut self, player_hand: &Hand, dealer_hand: &Hand, returned_money: u32);
 }
 
 #[cfg(test)]
@@ -565,200 +780,3 @@ mod tests {
         assert!(simulator.seat_player(0, 0).is_err());
     }
 }
-
-// // Bet 100
-// fn play_a_round<T: Strategy>(rule: &Rule, strategy: &mut T, shoe: &mut Shoe) -> (i32, bool) {
-//     let (my_first_card, _) = shoe.deal_card();
-//     let (dealer_up_card, _) = shoe.deal_card();
-//     let (my_second_card, _) = shoe.deal_card();
-//     let mut counts = [0; 10];
-//     for i in shoe.current_index..shoe.cards.len() {
-//         counts[(shoe.cards[i] - 1) as usize] += 1;
-//     }
-//     let initial_shoe = CardCount::new(&counts);
-
-//     let initial_situation = InitialSituation::new(
-//         initial_shoe,
-//         (my_first_card, my_second_card),
-//         dealer_up_card,
-//     );
-//     strategy.init(rule, &initial_situation);
-//     let (dealer_hole_card, _) = shoe.deal_card();
-
-//     let mut current_hand = CardCount::new(&[0; 10]);
-//     current_hand.add_card(my_first_card);
-//     current_hand.add_card(my_second_card);
-
-//     let dealer_natural_blackjack =
-//         dealer_up_card + dealer_hole_card == 11 && (dealer_up_card == 1 || dealer_hole_card == 1);
-//     let me_natural_blackjack = current_hand.get_sum() == 11 && current_hand.is_soft();
-
-//     if dealer_natural_blackjack {
-//         if me_natural_blackjack {
-//             return (0, shoe.reached_cut_card());
-//         }
-//         return (-100, shoe.reached_cut_card());
-//     }
-
-//     let mut bet = 100;
-//     let mut has_surrendered = false;
-//     loop {
-//         if current_hand.get_sum() > 21 {
-//             break;
-//         }
-//         let my_decision = strategy.make_decision(&current_hand);
-//         print!("{:#?} ", my_decision);
-//         match my_decision {
-//             Decision::Hit => {
-//                 let (card, _) = shoe.deal_card();
-//                 current_hand.add_card(card);
-//             }
-//             Decision::Stand => {
-//                 break;
-//             }
-//             Decision::Double => {
-//                 let (card, _) = shoe.deal_card();
-//                 current_hand.add_card(card);
-//                 bet *= 2;
-//                 break;
-//             }
-//             Decision::Surrender => {
-//                 has_surrendered = true;
-//                 break;
-//             }
-//             _ => {
-//                 panic!("wtf??")
-//             }
-//         }
-//     }
-//     println!();
-
-//     let my_sum = {
-//         if current_hand.is_soft() && current_hand.get_sum() + 10 <= 21 {
-//             current_hand.get_sum() + 10
-//         } else {
-//             current_hand.get_sum()
-//         }
-//     };
-
-//     let mut dealer_sum = dealer_up_card + dealer_hole_card;
-//     let mut dealer_soft = dealer_up_card == 1 || dealer_hole_card == 1;
-//     while !(dealer_sum >= 17 || dealer_soft && dealer_sum + 10 > 17 && dealer_sum + 10 <= 21) {
-//         let (card, _) = shoe.deal_card();
-//         dealer_soft = dealer_soft || card == 1;
-//         dealer_sum += card;
-//     }
-//     if dealer_sum < 17 {
-//         dealer_sum += 10;
-//     }
-//     let dealer_sum = dealer_sum as u16;
-
-//     if has_surrendered {
-//         bet = -bet / 2;
-//     } else if my_sum > 21 {
-//         bet = -bet;
-//     } else if me_natural_blackjack {
-//         bet += bet / 2;
-//     } else if dealer_sum <= 21 {
-//         if my_sum < dealer_sum {
-//             bet = -bet;
-//         } else if my_sum == dealer_sum {
-//             bet = 0;
-//         }
-//     }
-
-//     (bet, shoe.reached_cut_card())
-// }
-
-// fn get_typical_rule() -> Rule {
-//     Rule {
-//         number_of_decks: 8,
-//         cut_card_proportion: 0.5,
-//         split_all_limits: 1,
-//         split_ace_limits: 1,
-//         double_policy: crate::DoublePolicy::AnyTwo,
-//         dealer_hit_on_soft17: true,
-//         allow_das: true,
-//         allow_late_surrender: true,
-//         peek_policy: crate::PeekPolicy::UpAceOrTen,
-
-//         payout_blackjack: 1.5,
-//         payout_insurance: 0.0,
-//     }
-// }
-
-// #[test]
-// fn test_strategy_on_new_shoe() {
-//     println!("Test begin!!!");
-//     let firsts = vec![1, 5, 2];
-//     let mut shoe = Shoe::new(8, 0.5, &firsts);
-//     let rule = get_typical_rule();
-//     let mut basic_strategy: BasicStrategy = Default::default();
-//     let mut my_strategy: MyStrategy = MyStrategy {
-//         rule: rule,
-//         sol: SolutionForInitialSituation {
-//             general_solution: StateArray::new(),
-//             split_expectation: 0.0,
-//         },
-//     };
-
-//     let mut acc_basic: i32 = 0;
-//     let mut acc_my: i32 = 0;
-//     let total_rounds = 1_000_000;
-
-//     let mut duration_max: u128 = 0;
-//     let mut duration_min: u128 = u128::MAX;
-//     let mut duration_total: u128 = 0;
-//     for round in 0..total_rounds {
-//         shoe.reinit(firsts.len());
-//         while shoe.cards[0] == 1 && shoe.cards[2] == 1 {
-//             shoe.reinit(firsts.len());
-//         }
-//         // shoe.cards[0] = 1;
-//         // shoe.cards[1] = 9;
-//         // shoe.cards[2] = 2;
-//         // shoe.cards[3] = 10;
-//         // shoe.cards[4] = 8;
-//         // shoe.cards[5] = 10;
-//         // shoe.cards[6] = 7;
-//         // shoe.cards[7] = 2;
-//         // shoe.cards[8] = 9;
-//         // shoe.cards[9] = 2;
-//         // shoe.cards[10] = 10;
-//         print!("Turn #{}: ", round);
-//         for i in 0..20 {
-//             print!("{} ", shoe.cards[i]);
-//         }
-//         println!();
-//         let (profit_basic, _) = play_a_round(&rule, &mut basic_strategy, &mut shoe);
-//         acc_basic += profit_basic;
-//         shoe.retry();
-//         let time_start = SystemTime::now();
-//         let (profit_my, _) = play_a_round(&rule, &mut my_strategy, &mut shoe);
-//         let duration = SystemTime::now()
-//             .duration_since(time_start)
-//             .unwrap()
-//             .as_millis();
-//         if duration_max < duration {
-//             duration_max = duration;
-//         }
-//         if duration_min > duration {
-//             duration_min = duration;
-//         }
-//         duration_total += duration;
-//         acc_my += profit_my;
-//         println!(
-//             "Turn #{}: {:#?}, {:#?} this({:.2}s) max({:.2}s) avg({:.2}s) min({:.2}s)",
-//             round,
-//             acc_basic,
-//             acc_my,
-//             duration as f64 / 1000.0,
-//             duration_max as f64 / 1000.0,
-//             duration_total as f64 / (round + 1) as f64 / 1000.0,
-//             duration_min as f64 / 1000.0,
-//         );
-//     }
-//     println!();
-//     println!("Acc: {}, {}", acc_basic, acc_my);
-//     println!("Total rounds: {}", total_rounds);
-// }

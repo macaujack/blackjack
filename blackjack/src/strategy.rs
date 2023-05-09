@@ -1,21 +1,29 @@
 use crate::{
     calculation::{
         calculate_solution_without_initial_situation, get_max_expectation_of_stand_hit_surrender,
-        SolutionForBettingPhase, SolutionForInitialSituation,
+        ExpectationAfterSplit, SolutionForBettingPhase, SolutionForInitialSituation,
     },
-    CardCount, Decision, InitialSituation, Rule,
+    CardCount, Decision, DoubleCardCountIndex, HandState, InitialSituation, Rule,
 };
 
+/// Represents a strategy to play Blackjack.
 pub trait Strategy {
     fn calculate_expectation_before_bet(&mut self, rule: &Rule, shoe: &CardCount) -> f64;
     fn init_with_initial_situation(&mut self, rule: &Rule, initial_situation: &InitialSituation);
     fn should_buy_insurance(&mut self, rule: &Rule, initial_situation: &InitialSituation) -> bool;
-    fn make_decision(
+    fn should_split(
         &mut self,
         rule: &Rule,
-        current_hand: &CardCount,
-        current_split_all_times: u8,
-        current_split_ace_times: u8,
+        shoe: &CardCount,
+        dealer_up_card: u8,
+        hand_groups: &[&CardCount],
+    ) -> Option<usize>;
+    fn make_decision_single(&mut self, rule: &Rule, current_hand: &CardCount) -> Decision;
+    fn make_decision_multiple(
+        &mut self,
+        rule: &Rule,
+        current_hands: &[&CardCount],
+        hand_states: &[HandState],
     ) -> Decision;
 }
 
@@ -61,32 +69,71 @@ impl Strategy for DpStrategySinglePlayer {
         );
     }
 
-    fn should_buy_insurance(&mut self, rule: &Rule, _: &InitialSituation) -> bool {
+    fn should_buy_insurance(&mut self, _: &Rule, _: &InitialSituation) -> bool {
         self.solution_small.ex_extra_insurance > 0.0
     }
 
-    fn make_decision(
+    fn should_split(
         &mut self,
         rule: &Rule,
-        current_hand: &CardCount,
-        current_split_all_times: u8,
-        current_split_ace_times: u8,
-    ) -> Decision {
-        let (mut mx_ex, mut decision) = get_max_expectation_of_stand_hit_surrender(
+        _: &CardCount,
+        _: u8,
+        hand_groups: &[&CardCount],
+    ) -> Option<usize> {
+        let current_hand = hand_groups[0];
+        let initial_card_value = (current_hand.get_sum() / 2) as u8;
+        if current_hand[initial_card_value] != 2 {
+            panic!("Cannot split if two initial cards are different");
+        }
+        if self.solution_small.ex_split_result <= self.solution_small.ex_double {
+            return None;
+        }
+        let (mx_ex, _) = get_max_expectation_of_stand_hit_surrender(
+            &self.solution_small.ex_stand_hit,
+            &current_hand,
+            rule,
+        );
+
+        if self.solution_small.ex_split_result > mx_ex {
+            Some(0)
+        } else {
+            None
+        }
+    }
+
+    fn make_decision_single(&mut self, rule: &Rule, current_hand: &CardCount) -> Decision {
+        let (mx_ex, mut decision) = get_max_expectation_of_stand_hit_surrender(
             &self.solution_small.ex_stand_hit,
             current_hand,
             rule,
         );
         if current_hand.get_total() == 2 {
             if mx_ex < self.solution_small.ex_double {
-                mx_ex = self.solution_small.ex_double;
                 decision = Decision::Double;
             }
-            if mx_ex < self.solution_small.ex_split_result {
-                mx_ex = self.solution_small.ex_split_result;
-                decision = Decision::Split;
-            }
         }
+        decision
+    }
+
+    fn make_decision_multiple(
+        &mut self,
+        _: &Rule,
+        current_hands: &[&CardCount],
+        hand_states: &[HandState],
+    ) -> Decision {
+        let hand_state0 = {
+            if hand_states.len() == 0 {
+                HandState::PlaceHolder
+            } else {
+                hand_states[0]
+            }
+        };
+        let state_array_index =
+            DoubleCardCountIndex::new(current_hands[0], hand_state0, current_hands[1]);
+        let decision = self.solution_small.ex_split[state_array_index]
+            .get_max_expectation()
+            .1;
+
         decision
     }
 }
@@ -172,53 +219,64 @@ impl Strategy for BasicStrategy {
         self.dealer_up_card = initial_situation.dealer_up_card;
     }
 
-    fn should_buy_insurance(&mut self, rule: &Rule, initial_situation: &InitialSituation) -> bool {
+    fn should_buy_insurance(&mut self, _: &Rule, _: &InitialSituation) -> bool {
         false
     }
 
-    fn make_decision(
+    fn should_split(
         &mut self,
         rule: &Rule,
-        current_hand: &CardCount,
-        current_split_all_times: u8,
-        current_split_ace_times: u8,
-    ) -> Decision {
-        let col = (self.dealer_up_card - 1) as usize;
-
-        let decision = {
-            if current_hand.get_total() == 2
-                && current_hand[(current_hand.get_sum() / 2) as u8] == 2
-            {
-                // Pair
-                let row = (current_hand.get_sum() / 2) as usize;
-                self.pair_charts[row][col]
-            } else if current_hand.is_soft() && current_hand.get_sum() + 10 <= 21 {
-                // Soft hand
-                if current_hand[10] == 1 {
-                    (Decision::Stand, Decision::PlaceHolder)
-                } else {
-                    let another_card = current_hand.get_sum() - 1;
-                    let row = (another_card - 2) as usize;
-                    self.soft_charts[row][col]
-                }
-            } else {
-                // Hard hand
-                let row = {
-                    if current_hand.get_sum() <= 5 {
-                        0
-                    } else if current_hand.get_sum() >= 18 {
-                        13
-                    } else {
-                        current_hand.get_sum() - 5
-                    }
-                } as usize;
-                self.hard_charts[row][col]
+        _: &CardCount,
+        dealer_up_card: u8,
+        hand_groups: &[&CardCount],
+    ) -> Option<usize> {
+        for group_index in 0..hand_groups.len() {
+            let current_hand = hand_groups[group_index];
+            let initial_card_value = (current_hand.get_sum() / 2) as u8;
+            if current_hand[initial_card_value] != 2 {
+                continue;
             }
-        };
+            let row = (initial_card_value - 1) as usize;
+            let col = (dealer_up_card - 1) as usize;
+            let should_split = match self.pair_charts[row][col] {
+                (Decision::Split, _) => true,
+                (Decision::Surrender, Decision::Split) => !rule.allow_late_surrender,
+                _ => false,
+            };
+            if should_split {
+                return Some(group_index);
+            }
+        }
+        None
+    }
+
+    fn make_decision_single(&mut self, rule: &Rule, current_hand: &CardCount) -> Decision {
+        let decision = self.make_decision(current_hand);
+
+        match decision.0 {
+            Decision::Surrender => {
+                if rule.allow_late_surrender {
+                    Decision::Surrender
+                } else {
+                    decision.1
+                }
+            }
+            _ => decision.0,
+        }
+    }
+
+    fn make_decision_multiple(
+        &mut self,
+        rule: &Rule,
+        current_hands: &[&CardCount],
+        hand_states: &[HandState],
+    ) -> Decision {
+        let current_hand = current_hands[hand_states.len()];
+        let decision = self.make_decision(current_hand);
 
         match decision.0 {
             Decision::Double => {
-                if current_split_all_times == 0 || rule.allow_das {
+                if rule.allow_das {
                     Decision::Double
                 } else {
                     decision.1
@@ -232,6 +290,39 @@ impl Strategy for BasicStrategy {
                 }
             }
             _ => decision.0,
+        }
+    }
+}
+
+impl BasicStrategy {
+    fn make_decision(&mut self, current_hand: &CardCount) -> (Decision, Decision) {
+        let col = (self.dealer_up_card - 1) as usize;
+
+        if current_hand.get_total() == 2 && current_hand[(current_hand.get_sum() / 2) as u8] == 2 {
+            // Pair
+            let row = (current_hand.get_sum() / 2) as usize;
+            self.pair_charts[row][col]
+        } else if current_hand.is_soft() && current_hand.get_sum() + 10 <= 21 {
+            // Soft hand
+            if current_hand[10] == 1 {
+                (Decision::Stand, Decision::PlaceHolder)
+            } else {
+                let another_card = current_hand.get_sum() - 1;
+                let row = (another_card - 2) as usize;
+                self.soft_charts[row][col]
+            }
+        } else {
+            // Hard hand
+            let row = {
+                if current_hand.get_sum() <= 5 {
+                    0
+                } else if current_hand.get_sum() >= 18 {
+                    13
+                } else {
+                    current_hand.get_sum() - 5
+                }
+            } as usize;
+            self.hard_charts[row][col]
         }
     }
 }

@@ -122,19 +122,15 @@ pub fn simulate_playing_forever(
 
         if !dealer_does_peek_and_natural {
             simulator.wait_for_right_players()?;
+
+            // TODO: Split cards
+
             simulator.stop_split()?;
             for group_id in 0..simulator.get_number_of_groups() {
                 print!("Decisions for Group {}:", group_id);
                 loop {
                     let hand_card_count = simulator.get_my_current_card_count();
-                    let split_all_times = simulator.get_current_split_all_times();
-                    let split_ace_times = simulator.get_current_split_ace_times();
-                    let decision = dp_strategy.make_decision(
-                        rule,
-                        hand_card_count,
-                        split_all_times,
-                        split_ace_times,
-                    );
+                    let decision = dp_strategy.make_decision_single(rule, hand_card_count);
                     print!(" {}", decision_to_string(decision));
                     if decision == blackjack::Decision::Double {
                         stat_virtual.bet_money(BASIC_BET);

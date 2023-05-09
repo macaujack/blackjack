@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use proc_macro::TokenStream as TokenStream1;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, ToTokens};
-use syn::{self, DataStruct};
+use syn;
 
 /// This macro is added before a method of `Simulator` struct in the impl block.
 /// Use this macro to first check if current game phase is exactly the phase in

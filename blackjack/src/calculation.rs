@@ -3,15 +3,15 @@ mod split_ex;
 mod stand_hit_ex;
 mod stand_odds;
 
-use std::mem::MaybeUninit;
-
-use self::split_ex::{DealerHandValueProbability, ExpectationAfterSplit, ExpectationSH};
-
+use self::split_ex::{DealerHandValueProbability, ExpectationSH};
 use super::{Decision, PeekPolicy, Rule};
 use crate::{
     CardCount, DoubleCardCountIndex, DoubleStateArray, HandState, InitialSituation,
     SingleStateArray,
 };
+use std::mem::MaybeUninit;
+
+pub use split_ex::ExpectationAfterSplit;
 
 #[derive(Clone, Debug)]
 pub struct ExpectationStandHit {
@@ -497,7 +497,9 @@ fn calculate_expectations(
         if ex < ex_double {
             ex = ex_double;
         }
-        // TODO: Compare Split EX here.
+        if ex < ex_split_result {
+            ex = ex_split_result;
+        }
         ex
     };
     let ex_summary = p_early_end * ex_early_end + (1.0 - p_early_end) * ex_no_early_end;
