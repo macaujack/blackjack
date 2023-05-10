@@ -184,11 +184,14 @@ impl Simulator {
         handler: &mut U,
     ) -> Result<(), String> {
         handler.on_game_begin(&self.shoe);
+        let ex_before_bet =
+            strategy.calculate_expectation_before_bet(&self.rule, self.get_shoe_card_count());
 
         self.place_bets(main_bet)?;
-        handler.on_bet_money(main_bet);
+        handler.on_bet_money(main_bet, ex_before_bet);
 
         let initial_situation = self.deal_initial_cards()?;
+        strategy.init_with_initial_situation(&self.rule, &initial_situation);
         handler.on_deal_cards(&initial_situation);
 
         let dealer_cards = self.dealer_hand.get_cards(0);
@@ -212,6 +215,7 @@ impl Simulator {
                 let dealer_gets_natural = self.dealer_peeks(buy_insurance)?;
                 dealer_gets_natural
             } else {
+                self.current_game_phase = GamePhase::WaitForRightPlayers;
                 false
             }
         };
@@ -220,9 +224,9 @@ impl Simulator {
             self.wait_for_right_players()?;
 
             let split_time_limit = {
-                let dealer_cards = self.dealer_hand.get_cards(0);
-                if dealer_cards[0].blackjack_value() == dealer_cards[1].blackjack_value() {
-                    if dealer_cards[0].blackjack_value() == 1 {
+                let current_card = self.current_hand.get_cards(0);
+                if current_card[0].blackjack_value() == current_card[1].blackjack_value() {
+                    if current_card[0].blackjack_value() == 1 {
                         self.rule.split_ace_limits
                     } else {
                         self.rule.split_all_limits
@@ -737,9 +741,9 @@ impl Simulator {
 
 pub trait SimulatorEventHandler {
     fn on_game_begin(&mut self, shoe: &Shoe);
-    fn on_bet_money(&mut self, bet: u32);
+    fn on_bet_money(&mut self, bet: u32, ex_before_bet: f64);
     fn on_deal_cards(&mut self, initial_situation: &InitialSituation);
-    fn on_buy_insurance(&mut self, insurace_bet: u32);
+    fn on_buy_insurance(&mut self, insurance_bet: u32);
     fn on_game_early_end(&mut self);
     fn on_split(&mut self, player_hand: &Hand);
     fn on_make_decision(&mut self, decision: Decision, group_index: usize);

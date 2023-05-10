@@ -1,5 +1,5 @@
 use self::private::Statistics;
-use blackjack::strategy::Strategy;
+use blackjack::simulation::{Card, SimulatorEventHandler};
 use blackjack_drivers::ConfigBlackjackSimulator;
 
 mod private {
@@ -57,155 +57,184 @@ mod private {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct Handler {
+    main_bet: u32,
+    game_id: u64,
+    number_of_cards_in_shoe_before_game: u16,
+    top_cards_before_game: Vec<Card>,
+    ex_before_bet: f64,
+    sum_ex_before_bet: f64,
+    buy_insurance: bool,
+    should_split: bool,
+    decisions: Vec<Vec<String>>,
+
+    stat_virtual: Statistics,
+    stat_real: Statistics,
+}
+
+impl SimulatorEventHandler for Handler {
+    fn on_game_begin(&mut self, shoe: &blackjack::simulation::shoe::Shoe) {
+        self.game_id += 1;
+        self.number_of_cards_in_shoe_before_game = shoe.get_card_count().get_total();
+        self.top_cards_before_game = shoe.preview_next_few_cards(20).to_vec();
+        self.buy_insurance = false;
+        self.should_split = false;
+        self.decisions.clear();
+    }
+
+    fn on_bet_money(&mut self, bet: u32, ex_before_bet: f64) {
+        self.ex_before_bet = ex_before_bet;
+        self.sum_ex_before_bet += ex_before_bet;
+        self.stat_virtual.bet_money(bet);
+        if ex_before_bet > 0.0 {
+            self.stat_real.bet_money(bet);
+        }
+    }
+
+    fn on_deal_cards(&mut self, _: &blackjack::InitialSituation) {}
+
+    fn on_buy_insurance(&mut self, insurance_bet: u32) {
+        self.buy_insurance = insurance_bet > 0;
+        self.stat_virtual.bet_money(insurance_bet);
+        if self.ex_before_bet > 0.0 {
+            self.stat_real.bet_money(insurance_bet);
+        }
+    }
+
+    fn on_game_early_end(&mut self) {}
+
+    fn on_split(&mut self, _: &blackjack::simulation::hand::Hand) {
+        self.should_split = true;
+        self.stat_virtual.bet_money(self.main_bet);
+        if self.ex_before_bet > 0.0 {
+            self.stat_real.bet_money(self.main_bet);
+        }
+    }
+
+    fn on_make_decision(&mut self, decision: blackjack::Decision, group_index: usize) {
+        while self.decisions.len() <= group_index {
+            self.decisions.push(Vec::new());
+        }
+        self.decisions[group_index].push(decision_to_string(decision));
+        if decision == blackjack::Decision::Double {
+            self.stat_virtual.bet_money(self.main_bet);
+            if self.ex_before_bet > 0.0 {
+                self.stat_real.bet_money(self.main_bet);
+            }
+        }
+    }
+
+    fn on_player_bust(&mut self, group_index: usize) {
+        while self.decisions.len() <= group_index {
+            self.decisions.push(Vec::new());
+        }
+        self.decisions[group_index].push(String::from("BUST"));
+    }
+
+    fn on_player_charlie(&mut self, group_index: usize) {
+        while self.decisions.len() <= group_index {
+            self.decisions.push(Vec::new());
+        }
+        self.decisions[group_index].push(String::from("CHARLIE"));
+    }
+
+    fn on_summary_game(
+        &mut self,
+        player_hand: &blackjack::simulation::hand::Hand,
+        dealer_hand: &blackjack::simulation::hand::Hand,
+        returned_money: u32,
+    ) {
+        println!("Game #{}", self.game_id);
+        print!(
+            "Top {} (of {}) cards: ",
+            self.top_cards_before_game.len(),
+            self.number_of_cards_in_shoe_before_game
+        );
+        for card in &self.top_cards_before_game {
+            print!(" {}", card);
+        }
+        println!();
+
+        println!(
+            "Expectation: {:.6}   Avg: {:.6}",
+            self.ex_before_bet,
+            self.sum_ex_before_bet / self.game_id as f64
+        );
+
+        if self.buy_insurance {
+            println!("############## Should buy insurance! ############");
+        }
+        if self.should_split {
+            println!("$$$$$$$$$$$$$$ Should split! $$$$$$$$$$$$$");
+        }
+        println!();
+
+        for (group_index, decisions) in self.decisions.iter().enumerate() {
+            print!("Decisions for Group {}:", group_index);
+            for decision in decisions {
+                print!(" {}", decision);
+            }
+            println!();
+        }
+        println!();
+
+        print!("Dealer cards:");
+        for card in dealer_hand.get_cards(0) {
+            print!(" {}", card);
+        }
+        println!();
+        for group_index in 0..player_hand.get_number_of_groups() {
+            print!("Player hand group {}:", group_index);
+            let hand = player_hand.get_cards(group_index);
+            for card in hand {
+                print!(" {}", card);
+            }
+            println!();
+        }
+        println!();
+
+        self.stat_virtual.receive_money(returned_money);
+        if self.ex_before_bet > 0.0 {
+            self.stat_real.receive_money(returned_money);
+        }
+
+        print!("Virtual stat: ");
+        println!(
+            "Money: {}({}). Total bet: {}({}). Rate: {:.2}%. Min money: {}.",
+            self.stat_virtual.get_current_money(),
+            self.stat_virtual.get_delta_money(),
+            self.stat_virtual.get_total_bet(),
+            self.stat_virtual.get_delta_bet(),
+            self.stat_virtual.get_rate() * 100.0,
+            self.stat_virtual.get_min_money(),
+        );
+        print!("Real stat: ");
+        println!(
+            "Money: {}({}). Total bet: {}({}). Rate: {:.2}%. Min money: {}.",
+            self.stat_real.get_current_money(),
+            self.stat_real.get_delta_money(),
+            self.stat_real.get_total_bet(),
+            self.stat_real.get_delta_bet(),
+            self.stat_real.get_rate() * 100.0,
+            self.stat_real.get_min_money(),
+        );
+        println!("----------------------------------------------------");
+    }
+}
+
 pub fn simulate_playing_forever(
     rule: &blackjack::Rule,
     simulator_config: &ConfigBlackjackSimulator,
 ) -> Result<(), String> {
     let mut dp_strategy =
         blackjack::strategy::DpStrategySinglePlayer::new(simulator_config.number_of_threads);
+    let mut handler: Handler = Default::default();
     let mut simulator = blackjack::simulation::Simulator::new(rule);
 
-    // stat_virtual is used to do statistics when player places bets in each game.
-    let mut stat_virtual: Statistics = Default::default();
-    // stat_real is used to do statistics when player only places bets if expectation is positive.
-    let mut stat_real: Statistics = Default::default();
-    let mut prev_period_end_money = 0;
-    let mut prev_period_end_bet = 0;
-    let mut total_ex_sum = 0.0;
-
-    let mut game_id: u64 = 0;
-    const BASIC_BET: u32 = 100;
-
     loop {
-        game_id += 1;
-        println!("Game #{}", game_id);
-        let shoe_card_count = simulator.get_shoe_card_count();
-        println!("Number of cards in shoe: {}", shoe_card_count.get_total(),);
-        const TOP_NUMBER_OF_CARDS: usize = 20;
-        print!("Top {} cards:", TOP_NUMBER_OF_CARDS);
-        for card in simulator.preview_next_few_cards_in_shoe(TOP_NUMBER_OF_CARDS) {
-            print!(" {}", card);
-        }
-        println!();
-
         simulator.seat_player(1, 0)?;
-
-        let total_ex =
-            dp_strategy.calculate_expectation_before_bet(rule, simulator.get_shoe_card_count());
-        total_ex_sum += total_ex;
-        println!(
-            "Expectation: {:.6}. Avg: {:.6}",
-            total_ex,
-            total_ex_sum / game_id as f64
-        );
-        let bet = {
-            if total_ex <= 0.0 {
-                0
-            } else {
-                BASIC_BET
-            }
-        };
-        simulator.place_bets(BASIC_BET)?;
-        stat_virtual.bet_money(BASIC_BET);
-        stat_real.bet_money(bet);
-
-        let initial_situation = simulator.deal_initial_cards()?;
-        dp_strategy.init_with_initial_situation(rule, &initial_situation);
-
-        let buy_insurance = dp_strategy.should_buy_insurance(rule, &initial_situation);
-        if buy_insurance {
-            println!("########## Should buy insurance! ###############");
-            stat_virtual.bet_money(BASIC_BET / 2);
-            stat_real.bet_money(bet / 2);
-        }
-        let dealer_does_peek_and_natural = simulator.dealer_peeks_if_necessary(buy_insurance)?;
-
-        if !dealer_does_peek_and_natural {
-            simulator.wait_for_right_players()?;
-
-            // TODO: Split cards
-
-            simulator.stop_split()?;
-            for group_id in 0..simulator.get_number_of_groups() {
-                print!("Decisions for Group {}:", group_id);
-                loop {
-                    let hand_card_count = simulator.get_my_current_card_count();
-                    let decision = dp_strategy.make_decision_single(rule, hand_card_count);
-                    print!(" {}", decision_to_string(decision));
-                    if decision == blackjack::Decision::Double {
-                        stat_virtual.bet_money(BASIC_BET);
-                        stat_real.bet_money(bet);
-                    }
-                    let decision_fn = decision_to_fn(decision);
-                    if decision_fn(&mut simulator)? {
-                        break;
-                    }
-                }
-                println!();
-            }
-            simulator.wait_for_left_players()?;
-        }
-
-        let winning_money = simulator.dealer_plays_and_summary()?;
-        stat_virtual.receive_money(winning_money);
-        stat_real.receive_money((winning_money as u64 * bet as u64 / BASIC_BET as u64) as u32);
-
-        simulator.start_new_shoe_if_necessary()?;
-
-        println!();
-        print!("Virtual stat: ");
-        println!(
-            "Money: {}({}). Total bet: {}({}). Rate: {:.2}%. Min money: {}.",
-            stat_virtual.get_current_money(),
-            stat_virtual.get_delta_money(),
-            stat_virtual.get_total_bet(),
-            stat_virtual.get_delta_bet(),
-            stat_virtual.get_rate() * 100.0,
-            stat_virtual.get_min_money(),
-        );
-        print!("Real stat: ");
-        println!(
-            "Money: {}({}). Total bet: {}({}). Rate: {:.2}%. Min money: {}.",
-            stat_real.get_current_money(),
-            stat_real.get_delta_money(),
-            stat_real.get_total_bet(),
-            stat_real.get_delta_bet(),
-            stat_real.get_rate() * 100.0,
-            stat_real.get_min_money(),
-        );
-
-        println!();
-        let mut period_percentage = game_id % simulator_config.games_in_period;
-        let period_money = stat_real.get_current_money() - prev_period_end_money;
-        let period_bet = stat_real.get_total_bet() - prev_period_end_bet;
-        if period_percentage == 0 {
-            period_percentage = simulator_config.games_in_period as u64;
-            prev_period_end_money = stat_real.get_current_money();
-            prev_period_end_bet = stat_real.get_total_bet();
-        }
-        let period_percentage =
-            (period_percentage * 100 as u64) / simulator_config.games_in_period as u64;
-        print!("This period: ");
-        println!(
-            "Money: {}, Total bet: {}, Rate: {:.2}%. Process: {:.2}%",
-            period_money,
-            period_bet,
-            (period_money * 100) as f64 / period_bet as f64,
-            period_percentage,
-        );
-        println!("---------------------------------------------------------------------");
-    }
-}
-
-fn decision_to_fn(
-    decision: blackjack::Decision,
-) -> fn(&mut blackjack::simulation::Simulator) -> Result<bool, String> {
-    match decision {
-        blackjack::Decision::Stand => blackjack::simulation::Simulator::play_stand,
-        blackjack::Decision::Hit => blackjack::simulation::Simulator::play_hit,
-        blackjack::Decision::Double => blackjack::simulation::Simulator::play_double,
-        blackjack::Decision::Surrender => blackjack::simulation::Simulator::play_surrender,
-        _ => panic!("Impossible decision"),
+        simulator.automatic_simulate_with_fixed_main_bet(100, &mut dp_strategy, &mut handler)?;
     }
 }
 
