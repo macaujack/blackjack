@@ -11,13 +11,6 @@ pub trait Strategy {
     fn calculate_expectation_before_bet(&mut self, rule: &Rule, shoe: &CardCount) -> f64;
     fn init_with_initial_situation(&mut self, rule: &Rule, initial_situation: &InitialSituation);
     fn should_buy_insurance(&mut self, rule: &Rule, initial_situation: &InitialSituation) -> bool;
-    fn should_split(
-        &mut self,
-        rule: &Rule,
-        shoe: &CardCount,
-        dealer_up_card: u8,
-        hand_groups: &[&CardCount],
-    ) -> Option<usize>;
     fn make_decision_single(&mut self, rule: &Rule, current_hand: &CardCount) -> Decision;
     fn make_decision_multiple(
         &mut self,
@@ -73,43 +66,20 @@ impl Strategy for DpStrategySinglePlayer {
         self.solution_small.ex_extra_insurance > 0.0
     }
 
-    fn should_split(
-        &mut self,
-        rule: &Rule,
-        _: &CardCount,
-        _: u8,
-        hand_groups: &[&CardCount],
-    ) -> Option<usize> {
-        let current_hand = hand_groups[0];
-        let initial_card_value = (current_hand.get_sum() / 2) as u8;
-        if current_hand[initial_card_value] != 2 {
-            panic!("Cannot split if two initial cards are different");
-        }
-        if self.solution_small.ex_split_result <= self.solution_small.ex_double {
-            return None;
-        }
-        let (mx_ex, _) = get_max_expectation_of_stand_hit_surrender(
-            &self.solution_small.ex_stand_hit,
-            &current_hand,
-            rule,
-        );
-
-        if self.solution_small.ex_split_result > mx_ex {
-            Some(0)
-        } else {
-            None
-        }
-    }
-
     fn make_decision_single(&mut self, rule: &Rule, current_hand: &CardCount) -> Decision {
-        let (mx_ex, mut decision) = get_max_expectation_of_stand_hit_surrender(
+        let (mut mx_ex, mut decision) = get_max_expectation_of_stand_hit_surrender(
             &self.solution_small.ex_stand_hit,
             current_hand,
             rule,
         );
         if current_hand.get_total() == 2 {
             if mx_ex < self.solution_small.ex_double {
+                mx_ex = self.solution_small.ex_double;
                 decision = Decision::Double;
+            }
+            if mx_ex < self.solution_small.ex_split_result {
+                mx_ex = self.solution_small.ex_split_result;
+                decision = Decision::Split;
             }
         }
         decision
@@ -221,33 +191,6 @@ impl Strategy for BasicStrategy {
 
     fn should_buy_insurance(&mut self, _: &Rule, _: &InitialSituation) -> bool {
         false
-    }
-
-    fn should_split(
-        &mut self,
-        rule: &Rule,
-        _: &CardCount,
-        dealer_up_card: u8,
-        hand_groups: &[&CardCount],
-    ) -> Option<usize> {
-        for group_index in 0..hand_groups.len() {
-            let current_hand = hand_groups[group_index];
-            let initial_card_value = (current_hand.get_sum() / 2) as u8;
-            if current_hand[initial_card_value] != 2 {
-                continue;
-            }
-            let row = (initial_card_value - 1) as usize;
-            let col = (dealer_up_card - 1) as usize;
-            let should_split = match self.pair_charts[row][col] {
-                (Decision::Split, _) => true,
-                (Decision::Surrender, Decision::Split) => !rule.allow_late_surrender,
-                _ => false,
-            };
-            if should_split {
-                return Some(group_index);
-            }
-        }
-        None
     }
 
     fn make_decision_single(&mut self, rule: &Rule, current_hand: &CardCount) -> Decision {

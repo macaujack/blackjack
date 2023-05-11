@@ -59,7 +59,6 @@ mod private {
 
 #[derive(Debug, Clone, Default)]
 struct Handler {
-    main_bet: u32,
     game_id: u64,
     number_of_cards_in_shoe_before_game: u16,
     top_cards_before_game: Vec<Card>,
@@ -83,11 +82,14 @@ impl SimulatorEventHandler for Handler {
         self.decisions.clear();
     }
 
-    fn on_bet_money(&mut self, bet: u32, ex_before_bet: f64) {
-        self.ex_before_bet = ex_before_bet;
-        self.sum_ex_before_bet += ex_before_bet;
+    fn on_calculate_expectation(&mut self, expectation: f64) {
+        self.ex_before_bet = expectation;
+        self.sum_ex_before_bet += expectation;
+    }
+
+    fn on_bet_money(&mut self, bet: u32) {
         self.stat_virtual.bet_money(bet);
-        if ex_before_bet > 0.0 {
+        if self.ex_before_bet > 0.0 {
             self.stat_real.bet_money(bet);
         }
     }
@@ -104,24 +106,14 @@ impl SimulatorEventHandler for Handler {
 
     fn on_game_early_end(&mut self) {}
 
-    fn on_split(&mut self, _: &blackjack::simulation::hand::Hand) {
-        self.should_split = true;
-        self.stat_virtual.bet_money(self.main_bet);
-        if self.ex_before_bet > 0.0 {
-            self.stat_real.bet_money(self.main_bet);
-        }
-    }
-
     fn on_make_decision(&mut self, decision: blackjack::Decision, group_index: usize) {
         while self.decisions.len() <= group_index {
             self.decisions.push(Vec::new());
         }
         self.decisions[group_index].push(decision_to_string(decision));
-        if decision == blackjack::Decision::Double {
-            self.stat_virtual.bet_money(self.main_bet);
-            if self.ex_before_bet > 0.0 {
-                self.stat_real.bet_money(self.main_bet);
-            }
+
+        if decision == blackjack::Decision::Split {
+            self.should_split = true;
         }
     }
 

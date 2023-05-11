@@ -32,6 +32,19 @@ pub fn allowed_phase(attr: TokenStream1, item: TokenStream1) -> TokenStream1 {
     ast.into_token_stream().into()
 }
 
+#[proc_macro_attribute]
+pub fn validate_hand_at_least_two_cards(_: TokenStream1, item: TokenStream1) -> TokenStream1 {
+    let mut ast: syn::ImplItemFn = syn::parse(item).unwrap();
+    let tk2 = quote! {
+        if self.get_my_current_card_count().get_total() < 2 {
+            return Err(format!("Current playing hand group is a split group, which has only 1 card"));
+        }
+    };
+    let stmt: syn::Stmt = syn::parse(tk2.into()).unwrap();
+    ast.block.stmts.insert(0, stmt);
+    ast.into_token_stream().into()
+}
+
 #[proc_macro_derive(ExpectationAfterSplit)]
 pub fn expectation_after_split_derive(input: TokenStream1) -> TokenStream1 {
     let ast: syn::DeriveInput = syn::parse(input).unwrap();

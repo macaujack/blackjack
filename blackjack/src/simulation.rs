@@ -4,7 +4,7 @@ pub mod shoe;
 use crate::{
     strategy::Strategy, CardCount, Decision, HandState, InitialSituation, PeekPolicy, Rule,
 };
-use blackjack_macros::allowed_phase;
+use blackjack_macros::{allowed_phase, validate_hand_at_least_two_cards};
 use strum_macros::EnumIter;
 
 use self::{hand::Hand, shoe::Shoe};
@@ -106,7 +106,6 @@ pub enum GamePhase {
     DealInitialCards,
     DealerPeek,
     WaitForRightPlayers,
-    PlaySplit,
     Play,
     WaitForLeftPlayers,
     DealerPlayAndSummary,
@@ -131,6 +130,7 @@ pub struct Simulator {
     current_split_ace_times: u8,
     current_playing_group_index: usize,
     current_hand: hand::Hand,
+    hand_states: Vec<HandState>,
 }
 
 impl Simulator {
@@ -149,6 +149,7 @@ impl Simulator {
             current_split_ace_times: 0,
             current_playing_group_index: 0,
             current_hand: hand::Hand::new(),
+            hand_states: Vec::new(),
         }
     }
 
@@ -186,9 +187,10 @@ impl Simulator {
         handler.on_game_begin(&self.shoe);
         let ex_before_bet =
             strategy.calculate_expectation_before_bet(&self.rule, self.get_shoe_card_count());
+        handler.on_calculate_expectation(ex_before_bet);
 
         self.place_bets(main_bet)?;
-        handler.on_bet_money(main_bet, ex_before_bet);
+        handler.on_bet_money(main_bet);
 
         let initial_situation = self.deal_initial_cards()?;
         strategy.init_with_initial_situation(&self.rule, &initial_situation);
@@ -223,41 +225,40 @@ impl Simulator {
         if !dealer_peeks_and_gets_natural {
             self.wait_for_right_players()?;
 
-            let split_time_limit = {
-                let current_card = self.current_hand.get_cards(0);
-                if current_card[0].blackjack_value() == current_card[1].blackjack_value() {
-                    if current_card[0].blackjack_value() == 1 {
-                        self.rule.split_ace_limits
+            while self.current_game_phase == GamePhase::Play {
+                let decision = {
+                    if self.get_number_of_groups() == 1 {
+                        strategy.make_decision_single(&self.rule, self.get_my_current_card_count())
                     } else {
-                        self.rule.split_all_limits
+                        strategy.make_decision_multiple(
+                            &self.rule,
+                            &self.get_all_card_counts(),
+                            &self.hand_states,
+                        )
                     }
-                } else {
-                    0
+                };
+                handler.on_make_decision(decision, self.current_playing_group_index);
+                if decision == Decision::Double || decision == Decision::Split {
+                    handler.on_bet_money(main_bet);
                 }
-            };
-            for _ in 0..split_time_limit {
-                let hand_groups = self.get_all_card_counts();
-                let group_index = strategy.should_split(
-                    &self.rule,
-                    self.get_shoe_card_count(),
-                    initial_situation.dealer_up_card,
-                    &hand_groups,
-                );
 
-                if group_index.is_none() {
-                    break;
-                }
-                let group_index = group_index.unwrap();
-                self.play_split(group_index)?;
-                handler.on_split(&self.current_hand);
-            }
-            self.stop_split()?;
-
-            if self.current_split_ace_times == 0 {
-                if self.current_split_all_times == 0 {
-                    self.loop_make_decisions_single(strategy, handler);
-                } else {
-                    self.loop_make_decisions_multiple(strategy, handler);
+                match decision {
+                    Decision::Stand => {
+                        self.play_stand().unwrap();
+                    }
+                    Decision::Hit => {
+                        self.play_hit().unwrap();
+                    }
+                    Decision::Double => {
+                        self.play_double().unwrap();
+                    }
+                    Decision::Surrender => {
+                        self.play_surrender().unwrap();
+                    }
+                    Decision::Split => {
+                        self.play_split().unwrap();
+                    }
+                    _ => panic!("Impossible to reach!"),
                 }
             }
 
@@ -376,79 +377,83 @@ impl Simulator {
     #[allowed_phase(WaitForRightPlayers)]
     pub fn wait_for_right_players(&mut self) -> Result<(), String> {
         // Simply let them stand immediately.
-        self.current_game_phase = GamePhase::PlaySplit;
+        self.current_game_phase = GamePhase::Play;
         Ok(())
     }
 
-    /// Can be called at PlaySplit phase.
-    /// Call this to play hand.
-    /// Returns true if you reach split times limit and cannot make more splits.
+    /// Can be called at Play phase.
+    /// Call this to split hand.
+    /// Returns true if cannot play current hand group any more.
     ///
     /// Note that if you are splitting Aces, you cannot make other decisions.
-    #[allowed_phase(PlaySplit)]
-    pub fn play_split(&mut self, group_index: usize) -> Result<bool, String> {
+    #[validate_hand_at_least_two_cards]
+    #[allowed_phase(Play)]
+    pub fn play_split(&mut self) -> Result<bool, String> {
+        let my_card_count = self.get_my_current_card_count();
+        if my_card_count.get_total() != 2 {
+            return Err(format!("You can only split on initial two cards"));
+        }
         if self.reached_split_time_limits() {
             return Err(format!("You reached split time limits!"));
         }
-        let cards = self.current_hand.get_cards(group_index);
+        let cards = self
+            .current_hand
+            .get_cards(self.current_playing_group_index);
         if cards[0].blackjack_value() != cards[1].blackjack_value() {
             return Err(format!("You cannot split two cards with different values!"));
         }
+        let split_card_value = cards[0].blackjack_value();
 
         self.current_split_all_times += 1;
         if cards[0].blackjack_value() == 1 {
             self.current_split_ace_times += 1;
         }
 
-        self.current_hand.split_group(group_index);
-        let card = self.shoe.deal_card().unwrap();
-        self.current_hand.receive_card(group_index, card);
-        let card = self.shoe.deal_card().unwrap();
         self.current_hand
-            .receive_card(self.current_hand.get_number_of_groups() - 1, card);
+            .split_group(self.current_playing_group_index);
+        let card = self.shoe.deal_card().unwrap();
+        self.receive_card_for_me(card);
 
-        Ok(self.reached_split_time_limits())
-    }
-
-    /// Can be called at PlaySplit phase.
-    /// Call this stop Split and proceed to the next game phase.
-    ///
-    /// Note that if you just splitted Aces, you won't be able to make other decisions,
-    /// so the Play phase will be skipped.
-    #[allowed_phase(PlaySplit)]
-    pub fn stop_split(&mut self) -> Result<(), String> {
-        self.current_game_phase = {
-            if self.current_split_ace_times > 0 {
-                GamePhase::WaitForLeftPlayers
-            } else {
-                GamePhase::Play
-            }
-        };
-        Ok(())
+        if split_card_value == 1 {
+            self.hand_states.push(HandState::Normal);
+            self.move_to_next_group();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     /// Can be called at Play phase.
     /// Returns true if cannot play current hand group any more.
+    #[validate_hand_at_least_two_cards]
     #[allowed_phase(Play)]
     pub fn play_stand(&mut self) -> Result<bool, String> {
+        self.hand_states.push(HandState::Normal);
         self.move_to_next_group();
         Ok(true)
     }
 
     /// Can be called at Play phase.
     /// Returns true if cannot play current hand group any more.
+    #[validate_hand_at_least_two_cards]
     #[allowed_phase(Play)]
     pub fn play_hit(&mut self) -> Result<bool, String> {
         let card = self.shoe.deal_card().unwrap();
         self.receive_card_for_me(card);
         let my_card_count = self.get_my_current_card_count();
         if my_card_count.bust() {
-            self.determine_winning(0.0);
+            self.hand_states.push(HandState::Normal);
             self.move_to_next_group();
             return Ok(true);
         }
         if my_card_count.get_total() == self.rule.charlie_number as u16 {
-            self.determine_winning(2.0);
+            self.hand_states.push(HandState::Normal);
+            self.move_to_next_group();
+            return Ok(true);
+        }
+        // Note that when player gets a soft 21, he/she cannot make more decision.
+        if my_card_count.get_actual_sum() == 21 {
+            self.hand_states.push(HandState::Normal);
             self.move_to_next_group();
             return Ok(true);
         }
@@ -458,6 +463,7 @@ impl Simulator {
 
     /// Can be called at Play phase.
     /// Returns true if cannot play current hand group any more.
+    #[validate_hand_at_least_two_cards]
     #[allowed_phase(Play)]
     pub fn play_double(&mut self) -> Result<bool, String> {
         let my_card_count = self.get_my_current_card_count();
@@ -472,22 +478,20 @@ impl Simulator {
         self.receive_card_for_me(card);
         self.current_hand
             .double_down(self.current_playing_group_index);
-        let my_card_count = self.get_my_current_card_count();
-        if my_card_count.bust() {
-            self.determine_winning(0.0);
-        }
+        self.hand_states.push(HandState::Double);
         self.move_to_next_group();
         Ok(true)
     }
 
     /// Can be called at Play phase.
     /// Returns true if cannot play current hand group any more.
+    #[validate_hand_at_least_two_cards]
     #[allowed_phase(Play)]
     pub fn play_surrender(&mut self) -> Result<bool, String> {
         if !self.rule.allow_late_surrender {
             return Err(format!("Surrender is not allowed!"));
         }
-        self.determine_winning(0.5);
+        self.hand_states.push(HandState::Surrender);
         self.move_to_next_group();
         Ok(true)
     }
@@ -533,8 +537,8 @@ impl Simulator {
                     let my_card_count = self.current_hand.get_card_counts(i);
                     let mut this_group_win = self.current_hand.get_bet(i);
 
-                    if self.current_hand.is_winning_already_determined(i) {
-                        this_group_win = self.current_hand.get_bet(i);
+                    if self.hand_states[i] == HandState::Surrender {
+                        this_group_win /= 2;
                     } else if my_card_count.is_natural()
                         && self.current_hand.get_number_of_groups() == 1
                     {
@@ -542,6 +546,10 @@ impl Simulator {
                             this_group_win +=
                                 (this_group_win as f64 * self.rule.payout_blackjack) as u32;
                         }
+                    } else if my_card_count.bust() {
+                        this_group_win = 0;
+                    } else if my_card_count.get_total() == self.rule.charlie_number as u16 {
+                        this_group_win *= 2;
                     } else if dealer_card_count.bust() {
                         this_group_win *= 2;
                     } else if dealer_card_count.is_natural() {
@@ -551,6 +559,7 @@ impl Simulator {
                     } else if my_card_count.get_actual_sum() > dealer_card_count.get_actual_sum() {
                         this_group_win *= 2;
                     }
+
                     total_win += this_group_win;
                 }
 
@@ -629,14 +638,23 @@ impl Simulator {
         self.dealer_hand.receive_card(0, card);
     }
 
-    fn determine_winning(&mut self, multiplier: f64) {
-        self.current_hand
-            .determine_winning(self.current_playing_group_index, multiplier);
-    }
-
     /// Move current playing group to the next group. If no more group, the game phase will proceed.
     fn move_to_next_group(&mut self) {
         self.current_playing_group_index += 1;
+
+        while self.current_playing_group_index < self.current_hand.get_number_of_groups()
+            && self.get_my_current_card_count().get_total() == 1
+        {
+            // This is a Split group.
+            let card = self.shoe.deal_card().unwrap();
+            self.receive_card_for_me(card);
+            if self.current_split_ace_times == 0 {
+                break;
+            }
+            self.hand_states.push(HandState::Normal);
+            self.current_playing_group_index += 1;
+        }
+
         if self.current_playing_group_index == self.current_hand.get_number_of_groups() {
             self.current_game_phase = GamePhase::WaitForLeftPlayers;
         }
@@ -649,103 +667,17 @@ impl Simulator {
         self.current_playing_group_index = 0;
         self.current_hand.clear();
         self.insurance_bet = 0;
-    }
-
-    fn loop_make_decisions_single<T: Strategy, U: SimulatorEventHandler>(
-        &mut self,
-        strategy: &mut T,
-        handler: &mut U,
-    ) {
-        loop {
-            let current_hand = self.get_my_current_card_count();
-            let decision = strategy.make_decision_single(&self.rule, current_hand);
-            handler.on_make_decision(decision, 0);
-            let finished = match decision {
-                Decision::Stand => self.play_stand().unwrap(),
-                Decision::Hit => {
-                    let finished = self.play_hit().unwrap();
-                    self.check_bust_or_charlie(handler, 0);
-                    finished
-                }
-                Decision::Double => {
-                    let finished = self.play_double().unwrap();
-                    self.check_bust_or_charlie(handler, 0);
-                    finished
-                }
-                Decision::Surrender => self.play_surrender().unwrap(),
-                _ => panic!("Invalid decision!"),
-            };
-
-            if finished {
-                break;
-            }
-        }
-    }
-
-    fn loop_make_decisions_multiple<T: Strategy, U: SimulatorEventHandler>(
-        &mut self,
-        strategy: &mut T,
-        handler: &mut U,
-    ) {
-        let mut hand_states: Vec<HandState> = Vec::with_capacity(self.get_number_of_groups() - 1);
-        for group_index in 0..self.get_number_of_groups() {
-            loop {
-                let current_hands = self.get_all_card_counts();
-                let decision =
-                    strategy.make_decision_multiple(&self.rule, &current_hands, &hand_states);
-                handler.on_make_decision(decision, group_index);
-                let finished = match decision {
-                    Decision::Stand => {
-                        self.play_stand().unwrap();
-                        hand_states.push(HandState::Normal);
-                        true
-                    }
-                    Decision::Hit => {
-                        let finished = self.play_hit().unwrap();
-                        if finished {
-                            hand_states.push(HandState::Normal);
-                            self.check_bust_or_charlie(handler, group_index);
-                        }
-                        finished
-                    }
-                    Decision::Double => {
-                        self.play_double().unwrap();
-                        hand_states.push(HandState::Double);
-                        self.check_bust_or_charlie(handler, group_index);
-                        true
-                    }
-                    Decision::Surrender => {
-                        self.play_surrender().unwrap();
-                        hand_states.push(HandState::Surrender);
-                        true
-                    }
-                    _ => panic!("Invalid decision!"),
-                };
-
-                if finished {
-                    break;
-                }
-            }
-        }
-    }
-
-    fn check_bust_or_charlie<U: SimulatorEventHandler>(&self, handler: &mut U, group_index: usize) {
-        let current_hand = self.current_hand.get_card_counts(group_index);
-        if current_hand.bust() {
-            handler.on_player_bust(group_index);
-        } else if current_hand.get_total() == self.rule.charlie_number as u16 {
-            handler.on_player_charlie(group_index);
-        }
+        self.hand_states.clear();
     }
 }
 
 pub trait SimulatorEventHandler {
     fn on_game_begin(&mut self, shoe: &Shoe);
-    fn on_bet_money(&mut self, bet: u32, ex_before_bet: f64);
+    fn on_calculate_expectation(&mut self, expectation: f64);
+    fn on_bet_money(&mut self, bet: u32);
     fn on_deal_cards(&mut self, initial_situation: &InitialSituation);
     fn on_buy_insurance(&mut self, insurance_bet: u32);
     fn on_game_early_end(&mut self);
-    fn on_split(&mut self, player_hand: &Hand);
     fn on_make_decision(&mut self, decision: Decision, group_index: usize);
     fn on_player_bust(&mut self, group_index: usize);
     fn on_player_charlie(&mut self, group_index: usize);
