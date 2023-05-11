@@ -70,26 +70,16 @@ pub fn calculate_split_expectation<T: ExpectationAfterSplit + Default>(
         _ => panic!("Impossible to reach"),
     };
 
-    for card_value0 in 1..=10 {
-        current_hand0.add_card(card_value0);
-        for card_value1 in 1..=10 {
-            current_hand1.add_card(card_value1);
-
-            memoization_calculate_split_expectation_aux0(
-                rule,
-                dealer_up_card,
-                impossible_dealer_hole_card,
-                current_shoe,
-                &mut current_hand0,
-                &mut current_hand1,
-                ex,
-                dealer_hand_p,
-            );
-
-            current_hand1.remove_card(card_value1);
-        }
-        current_hand0.remove_card(card_value0);
-    }
+    memoization_calculate_split_expectation_aux0(
+        rule,
+        dealer_up_card,
+        impossible_dealer_hole_card,
+        current_shoe,
+        &mut current_hand0,
+        &mut current_hand1,
+        ex,
+        dealer_hand_p,
+    );
 }
 
 fn memoization_calculate_split_expectation_aux0<
@@ -122,7 +112,7 @@ fn memoization_calculate_split_expectation_aux0<
     // Decision 1: Stand.
     // Optimization here. When actual_sum <= 11, we cannot Stand.
     // Is this correct? Since there may be some cases, where we Stand even if actual_sum <= 11.
-    // This is to make the second hand easier to get a better result.
+    // This is to make the second hand more probable to get a better result.
     if current_hand0.get_actual_sum() > 11 {
         memoization_calculate_split_expectation_aux1::<T, DEALER_HOLE_CARD_MIN, DEALER_HOLE_CARD_MAX>(
             rule,
@@ -142,7 +132,8 @@ fn memoization_calculate_split_expectation_aux0<
         ex[state_array_index].set_stand(-f64::INFINITY);
     }
 
-    // Obvious cases. In these cases, we can only stand and must stand.
+    // Obvious cases. In these cases, we can only stand and must stand. Since we have calculated the expectation
+    // of Stand in previous code, we simply return here.
     if current_hand0.bust()
         || current_hand0.get_total() == rule.charlie_number as u16
         || current_hand0.get_actual_sum() == 21
