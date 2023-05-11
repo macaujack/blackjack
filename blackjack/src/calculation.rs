@@ -202,7 +202,8 @@ fn get_card_probability(shoe: &CardCount, impossible_dealer_hole_card: u8, targe
         }
     };
     let shoe_total_minus_one = (shoe.get_total() - 1) as f64;
-    let p1 = p_hole_card_is_target_card * (shoe[target_card] - 1) as f64 / shoe_total_minus_one;
+    let p1 = p_hole_card_is_target_card * (shoe[target_card].wrapping_sub(1)) as f64
+        / shoe_total_minus_one;
     let p2 = (1.0 - p_hole_card_is_target_card) * target_number / shoe_total_minus_one;
     p1 + p2
 }
@@ -249,15 +250,24 @@ pub fn calculate_solution_without_initial_situation(
     let total_combs = total_combs as f64;
     // Enumerate all possible combinations.
     for dealer_up_card in 1..=10 {
+        if initial_situation.shoe[dealer_up_card] == 0 {
+            continue;
+        }
         let idx10 = (dealer_up_card - 1) as usize;
         initial_situation.dealer_up_card = dealer_up_card;
         let combs = initial_situation.shoe[dealer_up_card] as u32;
         initial_situation.shoe.remove_card(dealer_up_card);
         for first_hand_card in 1..=10 {
+            if initial_situation.shoe[first_hand_card] == 0 {
+                continue;
+            }
             initial_situation.hand_cards.0 = first_hand_card;
             let combs = combs * initial_situation.shoe[first_hand_card] as u32;
             initial_situation.shoe.remove_card(first_hand_card);
             for second_hand_card in 1..=first_hand_card {
+                if initial_situation.shoe[second_hand_card] == 0 {
+                    continue;
+                }
                 let idx55 =
                     PREFIX_SUM[(first_hand_card - 1) as usize] + (second_hand_card - 1) as usize;
                 initial_situation.hand_cards.1 = second_hand_card;
@@ -422,6 +432,9 @@ fn calculate_expectations(
         } else {
             let mut ex_double = 0.0;
             for third_card in 1..=10 {
+                if initial_situation.shoe[third_card] == 0 {
+                    continue;
+                }
                 initial_hand.add_card(third_card);
                 let p = get_card_probability(
                     &initial_situation.shoe,
@@ -482,17 +495,13 @@ fn calculate_expectations(
     let ex_extra_insurance = p_early_end * rule.payout_insurance - (1.0 - p_early_end);
 
     // Calculate expectation summary.
-    let mut ex_early_end = {
+    let ex_early_end = {
         if initial_hand.is_natural() {
             0.0
         } else {
             -1.0
         }
     };
-    if ex_extra_insurance > 0.0 {
-        // Here we multiply by 0.5, because we can only spend half of main bet buying insurance.
-        ex_early_end += ex_extra_insurance * 0.5;
-    }
     let ex_no_early_end = {
         let (mut ex, _) =
             get_max_expectation_of_stand_hit_surrender(&ex_stand_hit, &initial_hand, rule);
@@ -504,7 +513,11 @@ fn calculate_expectations(
         }
         ex
     };
-    let ex_summary = p_early_end * ex_early_end + (1.0 - p_early_end) * ex_no_early_end;
+    let mut ex_summary = p_early_end * ex_early_end + (1.0 - p_early_end) * ex_no_early_end;
+    if ex_extra_insurance > 0.0 {
+        // Here we multiply by 0.5, because we can only spend half of main bet buying insurance.
+        ex_summary += ex_extra_insurance * 0.5;
+    }
 
     ExsOtherDecisions {
         ex_double,
@@ -760,5 +773,16 @@ pub mod tests {
             Decision::Surrender => 'R',
             _ => panic!("wtf"),
         }
+    }
+
+    #[test]
+    #[ignore]
+    fn test_calculate_expectation() {
+        let rule = get_typical_rule();
+        let shoe = CardCount::with_number_of_decks(rule.number_of_decks);
+        let shoe = CardCount::new(&[1, 0, 0, 0, 0, 0, 0, 0, 0, 30]);
+
+        let sol = calculate_solution_without_initial_situation(3, &rule, &shoe);
+        println!("Expectation is {}", sol.get_total_expectation());
     }
 }
