@@ -164,6 +164,10 @@ fn gather_dealer_count_states_aux<F>(
 
 #[cfg(test)]
 mod tests {
+    use std::println;
+
+    use crate::{DoubleCardCountIndex, DoubleStateArray, HandState};
+
     use super::*;
 
     #[test]
@@ -182,17 +186,41 @@ mod tests {
             &SingleStateArray::<()>::new(),
         );
 
-        let mut mark: SingleStateArray<u32> = Default::default();
+        let mut sum_states: SingleStateArray<u32> = Default::default();
+        let mut cartesian_states: DoubleStateArray<()> = Default::default();
         for state1 in &gathered_states[0] {
             let mut sum_state = state1.hand.clone();
             for state2 in &gathered_states[0] {
+                let mut has_same = false;
+                for card_value in 1..=10 {
+                    if state1.hand[card_value] > 0 && state2.hand[card_value] > 0 {
+                        has_same = true;
+                        break;
+                    }
+                }
+
+                if !has_same {
+                    continue;
+                }
+
                 sum_state.fast_add_assign(&state2.hand);
-                mark[&sum_state] += 1;
+                sum_states[&sum_state] += 1;
                 sum_state.fast_sub_assign(&state2.hand);
+
+                let index =
+                    DoubleCardCountIndex::new(&state1.hand, HandState::PlaceHolder, &state2.hand);
+                cartesian_states[index] = ();
             }
         }
 
-        println!("Number of states with double hands: {}", mark.len());
+        println!(
+            "Number of sum_states with double hands: {}",
+            sum_states.len()
+        );
+        println!(
+            "Number of cartesian_states with double hands: {}",
+            cartesian_states.len()
+        );
     }
 
     #[test]
