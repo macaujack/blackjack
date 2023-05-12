@@ -48,112 +48,164 @@ impl DealerHandValueProbability {
     }
 }
 
-pub fn dealer_gets_cards(
-    // Input parameters
-    rule: &Rule,
-    dealer_plus_shoe: &CardCount, // Dealer hand cards plus cards in shoe
+type MemoizationFunctionType =
+    fn(&Rule, &CardCount, &mut CardCount, &mut SingleStateArray<DealerHandValueProbability>);
 
-    // Output parameters
-    odds: &mut SingleStateArray<DealerHandValueProbability>,
-) {
-    let mut dealer_hand = CardCount::with_number_of_decks(0);
+struct DealerPlay<'a> {
+    rule: &'a Rule,
+    number_of_threads: usize,
+    memoization_functions: [MemoizationFunctionType; 10],
 
-    for card_value in 1..=10 {
-        dealer_hand.add_card(card_value);
-        if odds.contains_state(&dealer_hand) {
-            return;
-        }
+    dealer_odds: SingleStateArray<SingleStateArray<DealerHandValueProbability>>,
 
-        let memoization_dealer_gets_cards = match card_value {
-            1 => match rule.peek_policy {
-                PeekPolicy::UpAce | PeekPolicy::UpAceOrTen => memoization_dealer_gets_cards::<10>,
-                _ => memoization_dealer_gets_cards::<0>,
-            },
-            10 => match rule.peek_policy {
-                PeekPolicy::UpAceOrTen => memoization_dealer_gets_cards::<1>,
-                _ => memoization_dealer_gets_cards::<0>,
-            },
-            _ => memoization_dealer_gets_cards::<0>,
-        };
-
-        memoization_dealer_gets_cards(rule, dealer_plus_shoe, &mut dealer_hand, odds);
-
-        dealer_hand.remove_card(card_value);
-    }
+    dealer_hands_aux: Vec<CardCount>,
 }
 
-fn memoization_dealer_gets_cards<const IMPOSSIBLE_DEALER_HOLE_CARD: u8>(
-    // Input parameters
-    rule: &Rule,
-    dealer_plus_shoe: &CardCount, // Dealer hand cards plus cards in shoe
+impl<'a> DealerPlay<'a> {
+    pub fn new(rule: &'a Rule, number_of_threads: usize) -> Self {
+        let memoization_function_for_ace = match rule.peek_policy {
+            PeekPolicy::UpAce | PeekPolicy::UpAceOrTen => Self::memoization_dealer_gets_cards::<10>,
+            _ => Self::memoization_dealer_gets_cards::<0>,
+        };
+        let memoization_function_for_ten = match rule.peek_policy {
+            PeekPolicy::UpAceOrTen => Self::memoization_dealer_gets_cards::<1>,
+            _ => Self::memoization_dealer_gets_cards::<0>,
+        };
+        Self {
+            rule,
+            number_of_threads,
+            memoization_functions: [
+                memoization_function_for_ace,
+                Self::memoization_dealer_gets_cards::<0>,
+                Self::memoization_dealer_gets_cards::<0>,
+                Self::memoization_dealer_gets_cards::<0>,
+                Self::memoization_dealer_gets_cards::<0>,
+                Self::memoization_dealer_gets_cards::<0>,
+                Self::memoization_dealer_gets_cards::<0>,
+                Self::memoization_dealer_gets_cards::<0>,
+                Self::memoization_dealer_gets_cards::<0>,
+                memoization_function_for_ten,
+            ],
 
-    // Parameters to maintain current state
-    dealer_hand: &mut CardCount, // Dealer's hand except for the up card
+            dealer_odds: Default::default(),
 
-    // Output parameters
-    odds: &mut SingleStateArray<DealerHandValueProbability>,
-) {
-    if odds.contains_state(dealer_hand) {
-        return;
+            dealer_hands_aux: vec![CardCount::with_number_of_decks(0); 10],
+        }
     }
-    odds[dealer_hand] = Default::default();
 
-    // Case 1: Dealer must stand.
-    if dealer_hand.bust() {
-        odds[dealer_hand].end_with_bust();
-        return;
+    pub fn update_dealer_odds(&mut self, dealer_plus_shoes: &[&CardCount]) {
+        for dealer_plus_shoe in dealer_plus_shoes {
+            Self::update_dealer_odd(
+                self.rule,
+                *dealer_plus_shoe,
+                &self.memoization_functions,
+                &mut self.dealer_hands_aux[0],
+                &mut self.dealer_odds[*dealer_plus_shoe],
+            );
+        }
+        // TODO: Use multithreads
     }
-    let actual_sum = dealer_hand.get_actual_sum();
-    if actual_sum > 17 {
-        odds[dealer].end_with_normal(actual_sum);
-        return;
+
+    fn update_dealer_odd(
+        // Input parameters
+        rule: &Rule,
+        dealer_plus_shoe: &CardCount,
+        memoization_functions: &[MemoizationFunctionType; 10],
+
+        // Parameters to maintain current state
+        dealer_hand: &mut CardCount,
+
+        // Output parameters
+        odd: &mut SingleStateArray<DealerHandValueProbability>,
+    ) {
+        for dealer_up_card in 1..=10 {
+            dealer_hand.add_card(dealer_up_card);
+
+            let memoization_function = memoization_functions[(dealer_up_card - 1) as usize];
+            memoization_function(rule, dealer_plus_shoe, dealer_hand, odd);
+
+            dealer_hand.remove_card(dealer_up_card);
+        }
     }
-    if actual_sum == 17 {
-        if !dealer_hand.is_soft() || !rule.dealer_hit_on_soft17 {
-            odds[dealer].end_with_normal(17);
+
+    fn memoization_dealer_gets_cards<const IMPOSSIBLE_DEALER_HOLE_CARD: u8>(
+        // Input parameters
+        rule: &Rule,
+        dealer_plus_shoe: &CardCount,
+
+        // Parameters to maintain current state
+        dealer_hand: &mut CardCount,
+
+        // Output parameters
+        odd: &mut SingleStateArray<DealerHandValueProbability>,
+    ) {
+        if odd.contains_state(dealer_hand) {
             return;
         }
-    }
+        odd[dealer_hand] = Default::default();
 
-    // Case 2: Dealer must hit.
-    let impossible_card_number = {
-        if IMPOSSIBLE_DEALER_HOLE_CARD == 0 {
-            0
-        } else {
-            // This is impossible to be 0, because this means that all the cards in the shoe has been
-            // dealt, which is impossible to happen.
-            dealer_plus_shoe[IMPOSSIBLE_DEALER_HOLE_CARD] - dealer_hand[IMPOSSIBLE_DEALER_HOLE_CARD]
+        // Case 1: Dealer must stand.
+        if dealer_hand.bust() {
+            odd[dealer_hand].end_with_bust();
+            return;
         }
-    };
-    let current_valid_shoe_total =
-        dealer_plus_shoe.get_total() - dealer_hand.get_total() - impossible_card_number;
-    let current_valid_shoe_total = current_valid_shoe_total as f64;
-
-    let (next_card_min, next_card_max) = match IMPOSSIBLE_DEALER_HOLE_CARD {
-        0 => (1, 10),
-        1 => (2, 10),
-        10 => (1, 9),
-        _ => panic!("Impossible to reach"),
-    };
-
-    for card_value in next_card_min..=next_card_max {
-        if dealer_hand[card_value] == dealer_plus_shoe[card_value] {
-            continue;
+        let actual_sum = dealer_hand.get_actual_sum();
+        if actual_sum > 17 {
+            if dealer_hand.is_natural() {
+                odd[dealer_hand].end_with_bust();
+            } else {
+                odd[dealer_hand].end_with_normal(actual_sum);
+            }
+            return;
+        }
+        if actual_sum == 17 {
+            if !dealer_hand.is_soft() || !rule.dealer_hit_on_soft17 {
+                odd[dealer_hand].end_with_normal(17);
+                return;
+            }
         }
 
-        dealer_plus_shoe.add_card(card_value);
+        // Case 2: Dealer must hit.
+        let impossible_card_number = {
+            if IMPOSSIBLE_DEALER_HOLE_CARD == 0 {
+                0
+            } else {
+                // This is impossible to be 0, because this means that all the cards in the shoe has been
+                // dealt, which is impossible to happen.
+                dealer_plus_shoe[IMPOSSIBLE_DEALER_HOLE_CARD]
+                    - dealer_hand[IMPOSSIBLE_DEALER_HOLE_CARD]
+            }
+        };
+        let current_valid_shoe_total =
+            dealer_plus_shoe.get_total() - dealer_hand.get_total() - impossible_card_number;
+        let current_valid_shoe_total = current_valid_shoe_total as f64;
 
-        memoization_dealer_gets_cards::<0>(rule, dealer_plus_shoe, dealer_hand, odds);
-        let next_state_odds = &odds[dealer_hand] as *const DealerHandValueProbability;
+        let (next_card_min, next_card_max) = match IMPOSSIBLE_DEALER_HOLE_CARD {
+            0 => (1, 10),
+            1 => (2, 10),
+            10 => (1, 9),
+            _ => panic!("Impossible to reach"),
+        };
 
-        dealer_plus_shoe.remove_card(card_value);
+        for card_value in next_card_min..=next_card_max {
+            if dealer_hand[card_value] == dealer_plus_shoe[card_value] {
+                continue;
+            }
 
-        let target_cards_in_shoe = dealer_plus_shoe[card_value] - dealer_hand[card_value];
-        let p = target_cards_in_shoe as f64 / current_valid_shoe_total;
-        unsafe {
-            // Here, we know that we are referencing 2 different pieces of memory, but
-            // compilier doesn't know. This is absolutely safe.
-            odds[dealer_hand].add_assign_with_p(&*next_state_odds, p);
+            dealer_hand.add_card(card_value);
+
+            Self::memoization_dealer_gets_cards::<0>(rule, dealer_plus_shoe, dealer_hand, odd);
+            let next_state_odds = &odd[dealer_hand] as *const DealerHandValueProbability;
+
+            dealer_hand.remove_card(card_value);
+
+            let target_cards_in_shoe = dealer_plus_shoe[card_value] - dealer_hand[card_value];
+            let p = target_cards_in_shoe as f64 / current_valid_shoe_total;
+            unsafe {
+                // Here, we know that we are referencing 2 different pieces of memory, but
+                // compilier doesn't know. This is absolutely safe.
+                odd[dealer_hand].add_assign_with_p(&*next_state_odds, p);
+            }
         }
     }
 }
