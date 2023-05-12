@@ -26,6 +26,7 @@ pub fn multithreading_calculate_stand_hit_expectation(
         initial_hand,
         initial_shoe,
         rule.charlie_number,
+        &impossible_dealer_hole_card,
         feature_fn,
         ex_stand_hit,
     );
@@ -133,14 +134,14 @@ pub fn multithreading_calculate_stand_hit_expectation(
             }
 
             for next_card in 1..=10 {
-                if pair.shoe[next_card] == 0 {
+                let p = get_card_probability(&pair.shoe, impossible_dealer_hole_card, next_card);
+                if p == 0.0 {
                     continue;
                 }
                 pair.hand.add_card(next_card);
                 let (ex_max, _) =
                     get_max_expectation_of_stand_hit_surrender(ex_stand_hit, &pair.hand, rule);
                 pair.hand.remove_card(next_card);
-                let p = get_card_probability(&pair.shoe, impossible_dealer_hole_card, next_card);
                 ex_stand_hit[&pair.hand].hit += p * ex_max;
             }
         }
@@ -208,7 +209,8 @@ pub fn memoization_calculate_stand_hit_expectation(
     };
 
     for i in 1..=10 {
-        if current_shoe[i] == 0 {
+        let p = get_card_probability(current_shoe, *impossible_dealer_hole_card, i);
+        if p == 0.0 {
             continue;
         }
 
@@ -230,7 +232,6 @@ pub fn memoization_calculate_stand_hit_expectation(
         current_hand.remove_card(i);
         current_shoe.add_card(i);
 
-        let p = get_card_probability(current_shoe, *impossible_dealer_hole_card, i);
         ex_stand_hit[current_hand].hit += p * ex_max;
     }
 

@@ -56,12 +56,27 @@ pub fn calculate_split_expectation<T: ExpectationAfterSplit + Default>(
 
     // Output parameters
     ex: &mut DoubleStateArray<T>,
-    dealer_hand_p: &mut SingleStateArray<SingleStateArray<DealerHandValueProbability>>,
+    dealer_hand_ps: &mut SingleStateArray<SingleStateArray<DealerHandValueProbability>>,
 ) {
-    let card_value = current_hand.get_sum() as u8 / 2;
+    let split_card_value = current_hand.get_sum() as u8 / 2;
     let mut current_hand0 = CardCount::with_number_of_decks(0);
-    current_hand0.add_card(card_value);
+    current_hand0.add_card(split_card_value);
     let mut current_hand1 = current_hand0.clone();
+
+    // Special case: Split Aces
+    if split_card_value == 1 && !rule.allow_decisions_after_split_aces {
+        calculate_expectation_double_aces(
+            rule,
+            dealer_up_card,
+            impossible_dealer_hole_card,
+            current_shoe,
+            &mut current_hand0,
+            &mut current_hand1,
+            ex,
+            dealer_hand_ps,
+        );
+        return;
+    }
 
     let memoization_calculate_split_expectation_aux0 = match *impossible_dealer_hole_card {
         0 => memoization_calculate_split_expectation_aux0::<T, 1, 10>,
@@ -78,8 +93,86 @@ pub fn calculate_split_expectation<T: ExpectationAfterSplit + Default>(
         &mut current_hand0,
         &mut current_hand1,
         ex,
-        dealer_hand_p,
+        dealer_hand_ps,
     );
+}
+
+fn calculate_expectation_double_aces<T: ExpectationAfterSplit + Default>(
+    // Input parameters
+    rule: &Rule,
+    dealer_up_card: &u8,
+    impossible_dealer_hole_card: &u8,
+
+    // Parameters to maintain current state
+    current_shoe: &mut CardCount,
+    current_hand0: &mut CardCount,
+    current_hand1: &mut CardCount,
+
+    // Output parameters
+    ex: &mut DoubleStateArray<T>,
+    dealer_hand_ps: &mut SingleStateArray<SingleStateArray<DealerHandValueProbability>>,
+) {
+    let state_array_index =
+        DoubleCardCountIndex::new(current_hand0, HandState::Normal, current_hand1);
+    if ex.contains_state(state_array_index) {
+        return;
+    }
+    ex[state_array_index] = Default::default();
+
+    let memoization_calculate_split_expectation_aux2 = match *impossible_dealer_hole_card {
+        0 => memoization_calculate_split_expectation_aux2::<T, 1, 10, 1>,
+        1 => memoization_calculate_split_expectation_aux2::<T, 2, 10, 1>,
+        10 => memoization_calculate_split_expectation_aux2::<T, 1, 9, 1>,
+        _ => panic!("Impossible to reach"),
+    };
+    let mut ex_stand = 0.0;
+
+    for card_value0 in 1..=10 {
+        let p = get_card_probability(current_shoe, *impossible_dealer_hole_card, card_value0);
+        if p == 0.0 {
+            continue;
+        }
+        current_shoe.remove_card(card_value0);
+        current_hand0.add_card(card_value0);
+
+        for card_value1 in 1..=card_value0 {
+            let mut p =
+                p * get_card_probability(current_shoe, *impossible_dealer_hole_card, card_value1);
+            if p == 0.0 {
+                continue;
+            }
+            // TODO: Prove that this is correct.
+            if card_value0 != card_value1 {
+                p *= 2.0;
+            }
+            let p = p;
+
+            current_shoe.remove_card(card_value1);
+            current_hand1.add_card(card_value1);
+
+            memoization_calculate_split_expectation_aux2(
+                rule,
+                dealer_up_card,
+                current_shoe,
+                current_hand0,
+                &HandState::Normal,
+                current_hand1,
+                ex,
+                dealer_hand_ps,
+            );
+
+            let next_index =
+                DoubleCardCountIndex::new(current_hand0, HandState::Normal, current_hand1);
+            ex_stand += p * ex[next_index].stand();
+
+            current_hand1.remove_card(card_value1);
+            current_shoe.add_card(card_value1);
+        }
+
+        current_hand0.remove_card(card_value0);
+        current_shoe.add_card(card_value0);
+    }
+    ex[state_array_index].set_stand(ex_stand);
 }
 
 fn memoization_calculate_split_expectation_aux0<
@@ -111,6 +204,7 @@ fn memoization_calculate_split_expectation_aux0<
 
     // Decision 1: Stand.
     // Optimization here. When actual_sum <= 11, we cannot Stand.
+    // TODO: Prove this is correct.
     // Is this correct? Since there may be some cases, where we Stand even if actual_sum <= 11.
     // This is to make the second hand more probable to get a better result.
     if current_hand0.get_actual_sum() > 11 {
@@ -144,7 +238,8 @@ fn memoization_calculate_split_expectation_aux0<
     // Decision 2: Hit.
     let mut ex_hit = 0.0;
     for card_value in 1..=10 {
-        if current_shoe[card_value] == 0 {
+        let p = get_card_probability(current_shoe, *impossible_dealer_hole_card, card_value);
+        if p == 0.0 {
             continue;
         }
 
@@ -168,7 +263,6 @@ fn memoization_calculate_split_expectation_aux0<
         current_hand0.remove_card(card_value);
         current_shoe.add_card(card_value);
 
-        let p = get_card_probability(current_shoe, *impossible_dealer_hole_card, card_value);
         ex_hit += p * max_ex;
     }
     ex[state_array_index].set_hit(ex_hit);
@@ -196,7 +290,8 @@ fn memoization_calculate_split_expectation_aux0<
     if T::ALLOW_DAS && current_hand0.get_total() == 2 {
         let mut ex_double = 0.0;
         for card_value in 1..=10 {
-            if current_shoe[card_value] == 0 {
+            let p = get_card_probability(current_shoe, *impossible_dealer_hole_card, card_value);
+            if p == 0.0 {
                 continue;
             }
 
@@ -225,7 +320,6 @@ fn memoization_calculate_split_expectation_aux0<
             current_hand0.remove_card(card_value);
             current_shoe.add_card(card_value);
 
-            let p = get_card_probability(current_shoe, *impossible_dealer_hole_card, card_value);
             ex_double += p * max_ex;
         }
         ex[state_array_index].set_double(ex_double);
@@ -310,7 +404,8 @@ fn memoization_calculate_split_expectation_aux1<
     // Decision 2: Hit.
     let mut ex_hit = 0.0;
     for card_value in 1..=10 {
-        if current_shoe[card_value] == 0 {
+        let p = get_card_probability(current_shoe, *impossible_dealer_hole_card, card_value);
+        if p == 0.0 {
             continue;
         }
 
@@ -334,7 +429,6 @@ fn memoization_calculate_split_expectation_aux1<
         current_hand1.remove_card(card_value);
         current_shoe.add_card(card_value);
 
-        let p = get_card_probability(current_shoe, *impossible_dealer_hole_card, card_value);
         ex_hit += p * max_ex;
     }
     ex[state_array_index].set_hit(ex_hit);
@@ -362,7 +456,8 @@ fn memoization_calculate_split_expectation_aux1<
     if T::ALLOW_DAS && current_hand1.get_total() == 2 {
         let mut ex_double = 0.0;
         for card_value in 1..=10 {
-            if current_shoe[card_value] == 0 {
+            let p = get_card_probability(current_shoe, *impossible_dealer_hole_card, card_value);
+            if p == 0.0 {
                 continue;
             }
 
@@ -390,7 +485,6 @@ fn memoization_calculate_split_expectation_aux1<
             current_hand1.remove_card(card_value);
             current_shoe.add_card(card_value);
 
-            let p = get_card_probability(current_shoe, *impossible_dealer_hole_card, card_value);
             ex_double += p * max_ex;
         }
         ex[state_array_index].set_double(ex_double);

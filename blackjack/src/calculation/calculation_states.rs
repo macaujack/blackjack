@@ -1,5 +1,7 @@
 use crate::{CardCount, SingleStateArray};
 
+use super::get_card_probability;
+
 #[derive(Debug, Clone)]
 pub struct HandShoePair {
     pub hand: CardCount,
@@ -10,6 +12,7 @@ pub fn gather_hand_count_states<F, T: Default>(
     initial_hand: &CardCount,
     initial_shoe: &CardCount,
     charlie_number: u8,
+    impossible_dealer_hole_card: &u8,
     mut feature_fn: F,
     record: &SingleStateArray<T>,
 ) -> Vec<Vec<HandShoePair>>
@@ -21,6 +24,7 @@ where
     let mut shoe = initial_shoe.clone();
     gather_hand_count_states_aux(
         &charlie_number,
+        impossible_dealer_hole_card,
         &mut feature_fn,
         record,
         &mut hand,
@@ -33,6 +37,7 @@ where
 
 fn gather_hand_count_states_aux<F, T: Default>(
     charlie_number: &u8,
+    impossible_dealer_hole_card: &u8,
     feature_fn: &mut F,
     record: &SingleStateArray<T>,
     current_card_count: &mut CardCount,
@@ -62,13 +67,15 @@ fn gather_hand_count_states_aux<F, T: Default>(
     }
 
     for i in loop_start_card..=10 {
-        if current_shoe_count[i] == 0 {
+        let p = get_card_probability(current_shoe_count, *impossible_dealer_hole_card, i);
+        if p == 0.0 {
             continue;
         }
         current_shoe_count.remove_card(i);
         current_card_count.add_card(i);
         gather_hand_count_states_aux(
             charlie_number,
+            impossible_dealer_hole_card,
             feature_fn,
             record,
             current_card_count,
@@ -170,6 +177,7 @@ mod tests {
             &initial_hand,
             &initial_shoe,
             charlie_number,
+            &0,
             f,
             &SingleStateArray::<()>::new(),
         );
@@ -198,6 +206,7 @@ mod tests {
             &initial_hand,
             &initial_shoe,
             charlie_number,
+            &0,
             f,
             &SingleStateArray::<()>::new(),
         );

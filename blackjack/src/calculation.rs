@@ -189,6 +189,9 @@ impl SolutionForBettingPhase {
 
 fn get_card_probability(shoe: &CardCount, impossible_dealer_hole_card: u8, target_card: u8) -> f64 {
     let total = shoe.get_total() as f64;
+    if shoe[target_card] == 0 {
+        return 0.0;
+    }
     let target_number = shoe[target_card] as f64;
     if impossible_dealer_hole_card == 0 {
         return target_number / total;
@@ -432,15 +435,15 @@ fn calculate_expectations(
         } else {
             let mut ex_double = 0.0;
             for third_card in 1..=10 {
-                if initial_situation.shoe[third_card] == 0 {
-                    continue;
-                }
-                initial_hand.add_card(third_card);
                 let p = get_card_probability(
                     &initial_situation.shoe,
                     impossible_dealer_hole_card,
                     third_card,
                 );
+                if p == 0.0 {
+                    continue;
+                }
+                initial_hand.add_card(third_card);
                 ex_double += p * ex_stand_hit[&initial_hand].stand;
                 initial_hand.remove_card(third_card);
             }
@@ -548,6 +551,13 @@ pub mod tests {
             payout_blackjack: 1.5,
             payout_insurance: 2.0,
         }
+    }
+
+    #[test]
+    fn test_get_card_probability() {
+        let shoe = CardCount::new(&[0, 1, 0, 0, 0, 0, 0, 0, 0, 9]);
+        let p = get_card_probability(&shoe, 10, 2);
+        assert_eq!(p, 0.0);
     }
 
     #[test]
@@ -781,7 +791,6 @@ pub mod tests {
     fn test_calculate_expectation() {
         let rule = get_typical_rule();
         let shoe = CardCount::with_number_of_decks(rule.number_of_decks);
-        let shoe = CardCount::new(&[1, 0, 0, 0, 0, 0, 0, 0, 0, 30]);
 
         let sol = calculate_solution_without_initial_situation(3, &rule, &shoe);
         println!("Expectation is {}", sol.get_total_expectation());
