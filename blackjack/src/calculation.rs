@@ -537,6 +537,7 @@ pub mod tests {
             cut_card_proportion: 0.5,
             split_all_limits: 1,
             split_ace_limits: 1,
+            allow_decisions_after_split_aces: false,
             double_policy: crate::DoublePolicy::AnyTwo,
             dealer_hit_on_soft17: false,
             allow_das: false,

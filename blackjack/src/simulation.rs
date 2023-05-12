@@ -126,8 +126,8 @@ pub struct Simulator {
     insurance_bet: u32,
 
     // My playing state
-    current_split_all_times: u8,
-    current_split_ace_times: u8,
+    current_split_times: u8,
+    split_card_value: u8,
     current_playing_group_index: usize,
     current_hand: hand::Hand,
     hand_states: Vec<HandState>,
@@ -145,8 +145,8 @@ impl Simulator {
             shoe,
             dealer_hand: hand::Hand::new(),
             insurance_bet: 0,
-            current_split_all_times: 0,
-            current_split_ace_times: 0,
+            current_split_times: 0,
+            split_card_value: 0,
             current_playing_group_index: 0,
             current_hand: hand::Hand::new(),
             hand_states: Vec::new(),
@@ -404,10 +404,7 @@ impl Simulator {
         }
         let split_card_value = cards[0].blackjack_value();
 
-        self.current_split_all_times += 1;
-        if cards[0].blackjack_value() == 1 {
-            self.current_split_ace_times += 1;
-        }
+        self.current_split_times += 1;
 
         self.current_hand
             .split_group(self.current_playing_group_index);
@@ -587,20 +584,26 @@ impl Simulator {
     }
 
     pub fn reached_split_time_limits(&self) -> bool {
-        self.current_split_all_times == self.rule.split_all_limits
-            || self.current_split_ace_times == self.rule.split_ace_limits
+        let limit = {
+            if self.split_card_value == 1 {
+                self.rule.split_ace_limits
+            } else {
+                self.rule.split_all_limits
+            }
+        };
+        self.current_split_times == limit
     }
 
     pub fn get_shoe_card_count(&self) -> &CardCount {
         &self.shoe.get_card_count()
     }
 
-    pub fn get_current_split_all_times(&self) -> u8 {
-        self.current_split_all_times
+    pub fn get_current_split_times(&self) -> u8 {
+        self.current_split_times
     }
 
-    pub fn get_current_split_ace_times(&self) -> u8 {
-        self.current_split_ace_times
+    pub fn get_split_card_value(&self) -> u8 {
+        self.split_card_value
     }
 
     pub fn get_number_of_groups(&self) -> usize {
@@ -648,7 +651,7 @@ impl Simulator {
             // This is a Split group.
             let card = self.shoe.deal_card().unwrap();
             self.receive_card_for_me(card);
-            if self.current_split_ace_times == 0 {
+            if self.split_card_value != 1 || self.rule.allow_decisions_after_split_aces {
                 break;
             }
             self.hand_states.push(HandState::Normal);
@@ -662,8 +665,8 @@ impl Simulator {
 
     fn new_game(&mut self) {
         self.dealer_hand.clear();
-        self.current_split_all_times = 0;
-        self.current_split_ace_times = 0;
+        self.current_split_times = 0;
+        self.split_card_value = 0;
         self.current_playing_group_index = 0;
         self.current_hand.clear();
         self.insurance_bet = 0;
@@ -694,6 +697,7 @@ mod tests {
             cut_card_proportion: 0.5,
             split_all_limits: 1,
             split_ace_limits: 1,
+            allow_decisions_after_split_aces: false,
             double_policy: crate::DoublePolicy::AnyTwo,
             dealer_hit_on_soft17: false,
             allow_das: false,
