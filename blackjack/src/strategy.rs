@@ -67,18 +67,18 @@ impl Strategy for DpStrategySinglePlayer {
     }
 
     fn make_decision_single(&mut self, rule: &Rule, current_hand: &CardCount) -> Decision {
-        let (mut mx_ex, mut decision) = get_max_expectation_of_stand_hit_surrender(
+        let (mut _mx_ex, mut decision) = get_max_expectation_of_stand_hit_surrender(
             &self.solution_small.ex_stand_hit,
             current_hand,
             rule,
         );
         if current_hand.get_total() == 2 {
-            if mx_ex < self.solution_small.ex_double {
-                mx_ex = self.solution_small.ex_double;
+            if _mx_ex < self.solution_small.ex_double {
+                _mx_ex = self.solution_small.ex_double;
                 decision = Decision::Double;
             }
-            if mx_ex < self.solution_small.ex_split_result {
-                mx_ex = self.solution_small.ex_split_result;
+            if _mx_ex < self.solution_small.ex_split_result {
+                _mx_ex = self.solution_small.ex_split_result;
                 decision = Decision::Split;
             }
         }
