@@ -6,10 +6,14 @@ mod stand_odds;
 use self::split_ex::{DealerHandValueProbability, ExpectationSH};
 use super::{Decision, PeekPolicy, Rule};
 use crate::{
+    calculation::{
+        split_ex::{R0_AFT, R0_BEF, R1_AFT, R1_BEF, R2_AFT, R2_BEF},
+        stand_odds::{R3_AFT, R3_BEF},
+    },
     CardCount, DoubleCardCountIndex, DoubleStateArray, HandState, InitialSituation,
     SingleStateArray,
 };
-use std::mem::MaybeUninit;
+use std::{mem::MaybeUninit, println};
 
 pub use split_ex::ExpectationAfterSplit;
 
@@ -299,6 +303,45 @@ pub fn calculate_solution_without_initial_situation(
             initial_situation.shoe.add_card(first_hand_card);
         }
         initial_situation.shoe.add_card(dealer_up_card);
+
+        // TODO: Delete debug
+        // loop {
+        //     println!("Input: ");
+        //     let mut line = String::new();
+        //     std::io::stdin()
+        //         .read_line(&mut line)
+        //         .expect("Failed to read line");
+
+        //     let inputs: Vec<u8> = line
+        //         .split_whitespace()
+        //         .map(|x| x.parse().expect("Not an integer!"))
+        //         .collect();
+
+        //     let mut hand0 = CardCount::with_number_of_decks(0);
+        //     let mut hand1 = CardCount::with_number_of_decks(0);
+        //     let mut hand = &mut hand0;
+        //     let mut hand_state0 = HandState::PlaceHolder;
+        //     for input in inputs {
+        //         match input {
+        //             1..=10 => hand.add_card(input),
+        //             0 => {
+        //                 hand = &mut hand1;
+        //                 hand_state0 = HandState::PlaceHolder;
+        //             }
+        //             11 => {
+        //                 hand = &mut hand1;
+        //                 hand_state0 = HandState::Normal;
+        //             }
+        //             _ => {
+        //                 println!("Invalid input");
+        //                 continue;
+        //             }
+        //         }
+        //     }
+        //     let state_array_index = DoubleCardCountIndex::new(&hand0, hand_state0, &hand1);
+        //     let ex_split = &solution.exs_split[idx10];
+        //     println!("{:#?}", &ex_split[state_array_index]);
+        // }
     }
 
     solution
@@ -377,56 +420,41 @@ fn calculate_expectations(
         // TODO: Calculate Split with multi-threading.
     }
 
-    // if initial_situation.hand_cards.0 == initial_situation.hand_cards.1 {
-    //     let mut dealer_hand_ps: SingleStateArray<SingleStateArray<DealerHandValueProbability>> =
-    //         SingleStateArray::new();
-    //     split_ex::calculate_split_expectation(
-    //         rule,
-    //         &initial_situation.dealer_up_card,
-    //         &impossible_dealer_hole_card,
-    //         &mut shoe,
-    //         &initial_hand,
-    //         ex_split,
-    //         &mut dealer_hand_ps,
-    //     );
-    //     // TODO: Delete debug
-    //     loop {
-    //         println!("Input: ");
-    //         let mut line = String::new();
-    //         std::io::stdin()
-    //             .read_line(&mut line)
-    //             .expect("Failed to read line");
-
-    //         let inputs: Vec<u8> = line
-    //             .split_whitespace()
-    //             .map(|x| x.parse().expect("Not an integer!"))
-    //             .collect();
-
-    //         let mut hand0 = CardCount::with_number_of_decks(0);
-    //         let mut hand1 = CardCount::with_number_of_decks(0);
-    //         let mut hand = &mut hand0;
-    //         let mut hand_state0 = HandState::PlaceHolder;
-    //         for input in inputs {
-    //             match input {
-    //                 1..=10 => hand.add_card(input),
-    //                 0 => {
-    //                     hand = &mut hand1;
-    //                     hand_state0 = HandState::PlaceHolder;
-    //                 }
-    //                 11 => {
-    //                     hand = &mut hand1;
-    //                     hand_state0 = HandState::Normal;
-    //                 }
-    //                 _ => {
-    //                     println!("Invalid input");
-    //                     continue;
-    //                 }
-    //             }
-    //         }
-    //         let state_array_index = DoubleCardCountIndex::new(&hand0, hand_state0, &hand1);
-    //         println!("{:#?}", &ex_split[state_array_index]);
-    //     }
-    // }
+    if initial_situation.hand_cards.0 == initial_situation.hand_cards.1 {
+        let mut dealer_hand_ps: SingleStateArray<SingleStateArray<DealerHandValueProbability>> =
+            SingleStateArray::new();
+        // TODO: Delete Debug
+        println!(
+            "Begin Split: dealer({}), my({})",
+            initial_situation.dealer_up_card, initial_situation.hand_cards.0
+        );
+        split_ex::calculate_split_expectation(
+            rule,
+            &initial_situation.dealer_up_card,
+            &impossible_dealer_hole_card,
+            &mut shoe,
+            &initial_hand,
+            ex_split,
+            &mut dealer_hand_ps,
+        );
+        // TODO: Delete Debug
+        println!(
+            "End Split: dealer({}), my({})",
+            initial_situation.dealer_up_card, initial_situation.hand_cards.0
+        );
+        unsafe {
+            println!("R0_BEF = {}", R0_BEF);
+            println!("R0_AFT = {}", R0_AFT);
+            println!("R1_BEF = {}", R1_BEF);
+            println!("R1_AFT = {}", R1_AFT);
+            println!("R2_BEF = {}", R2_BEF);
+            println!("R2_AFT = {}", R2_AFT);
+            println!("R3_BEF = {}", R3_BEF);
+            println!("R3_AFT = {}", R3_AFT);
+            println!("R3_AFT / R2_AFT = {}", R3_AFT as f64 / R2_AFT as f64);
+        }
+        println!("-----------------------------------------");
+    }
 
     // Calculate expectation of Double.
     let ex_double = {
@@ -453,38 +481,16 @@ fn calculate_expectations(
 
     // Calculate expectation of Split
     let ex_split_result = {
-        // TODO: Delete Debug
-        -f64::INFINITY
-        // if initial_situation.hand_cards.0 != initial_situation.hand_cards.1 {
-        //     -f64::INFINITY
-        // } else {
-        //     let mut current_shoe = initial_situation.shoe.clone();
-        //     let mut ex_split_result = 0.0;
-        //     let mut hand0 = CardCount::with_number_of_decks(0);
-        //     hand0.add_card(initial_situation.hand_cards.0);
-        //     let mut hand1 = CardCount::with_number_of_decks(0);
-        //     hand1.add_card(initial_situation.hand_cards.1);
-        //     for card0 in 1..=10 {
-        //         current_shoe.remove_card(card0);
-        //         hand0.add_card(card0);
-        //         let p0 = get_card_probability(&current_shoe, impossible_dealer_hole_card, card0);
-        //         for card1 in 1..=10 {
-        //             hand1.add_card(card1);
+        if initial_situation.hand_cards.0 != initial_situation.hand_cards.1 {
+            -f64::INFINITY
+        } else {
+            let mut hand0 = CardCount::with_number_of_decks(0);
+            hand0.add_card(initial_situation.hand_cards.0);
 
-        //             let state_array_index =
-        //                 DoubleCardCountIndex::new(&hand0, HandState::PlaceHolder, &hand1);
-        //             let p = get_card_probability(&current_shoe, impossible_dealer_hole_card, card1);
-        //             let p = p0 * p;
-        //             ex_split_result += p * ex_split[state_array_index].get_max_expectation().0;
-
-        //             hand1.remove_card(card1);
-        //         }
-        //         hand0.remove_card(card0);
-        //         current_shoe.add_card(card0);
-        //     }
-
-        //     ex_split_result
-        // }
+            let state_array_index =
+                DoubleCardCountIndex::new(&hand0, HandState::PlaceHolder, &hand0);
+            ex_split[state_array_index].get_max_expectation().0
+        }
     };
 
     // Calculate extra expectation of side bet "Buy Insurance".

@@ -1,3 +1,5 @@
+use std::println;
+
 use self::private::Statistics;
 use blackjack::simulation::{Card, SimulatorEventHandler};
 use blackjack_drivers::ConfigBlackjackSimulator;
@@ -83,6 +85,10 @@ impl SimulatorEventHandler for Handler {
     }
 
     fn on_calculate_expectation(&mut self, expectation: f64) {
+        // TODO: Delete Debug
+        println!("################################################");
+        println!("Expectation is {}", expectation);
+        println!("################################################");
         self.ex_before_bet = expectation;
         self.sum_ex_before_bet += expectation;
     }

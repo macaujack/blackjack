@@ -1,5 +1,8 @@
 use crate::{CardCount, Rule, SingleStateArray};
 
+pub static mut R3_BEF: u64 = 0;
+pub static mut R3_AFT: u64 = 0;
+
 /// Note that the callers of `end_with_dealer_*` functions must handle the following cases separately before
 /// calling this function:
 /// 1. Player's hand busts.
@@ -31,8 +34,14 @@ pub fn memoization_dealer_get_cards<
     dealer_extra_hand: &mut CardCount, // Dealer's hand except for the up card
     odds: &mut SingleStateArray<T>,
 ) {
+    unsafe {
+        R3_BEF += 1;
+    }
     if odds.contains_state(dealer_extra_hand) {
         return;
+    }
+    unsafe {
+        R3_AFT += 1;
     }
     odds[dealer_extra_hand] = Default::default();
 

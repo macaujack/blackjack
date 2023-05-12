@@ -8,6 +8,13 @@ use super::{
     stand_odds::{memoization_dealer_get_cards, DealerHandHandler},
 };
 
+pub static mut R0_BEF: u64 = 0;
+pub static mut R0_AFT: u64 = 0;
+pub static mut R1_BEF: u64 = 0;
+pub static mut R1_AFT: u64 = 0;
+pub static mut R2_BEF: u64 = 0;
+pub static mut R2_AFT: u64 = 0;
+
 pub trait ExpectationAfterSplit {
     const ALLOW_DAS: bool;
     const ALLOW_LATE_SURRENDER: bool;
@@ -113,7 +120,7 @@ fn calculate_expectation_double_aces<T: ExpectationAfterSplit + Default>(
     dealer_hand_ps: &mut SingleStateArray<SingleStateArray<DealerHandValueProbability>>,
 ) {
     let state_array_index =
-        DoubleCardCountIndex::new(current_hand0, HandState::Normal, current_hand1);
+        DoubleCardCountIndex::new(current_hand0, HandState::PlaceHolder, current_hand1);
     if ex.contains_state(state_array_index) {
         return;
     }
@@ -125,7 +132,7 @@ fn calculate_expectation_double_aces<T: ExpectationAfterSplit + Default>(
         10 => memoization_calculate_split_expectation_aux2::<T, 1, 9, 1>,
         _ => panic!("Impossible to reach"),
     };
-    let mut ex_stand = 0.0;
+    let mut ex_hit = 0.0;
 
     for card_value0 in 1..=10 {
         let p = get_card_probability(current_shoe, *impossible_dealer_hole_card, card_value0);
@@ -163,7 +170,7 @@ fn calculate_expectation_double_aces<T: ExpectationAfterSplit + Default>(
 
             let next_index =
                 DoubleCardCountIndex::new(current_hand0, HandState::Normal, current_hand1);
-            ex_stand += p * ex[next_index].stand();
+            ex_hit += p * ex[next_index].stand();
 
             current_hand1.remove_card(card_value1);
             current_shoe.add_card(card_value1);
@@ -172,7 +179,7 @@ fn calculate_expectation_double_aces<T: ExpectationAfterSplit + Default>(
         current_hand0.remove_card(card_value0);
         current_shoe.add_card(card_value0);
     }
-    ex[state_array_index].set_stand(ex_stand);
+    ex[state_array_index].set_hit(ex_hit);
 }
 
 fn memoization_calculate_split_expectation_aux0<
@@ -197,8 +204,14 @@ fn memoization_calculate_split_expectation_aux0<
     let state_array_index =
         DoubleCardCountIndex::new(current_hand0, HandState::PlaceHolder, current_hand1);
 
+    unsafe {
+        R0_BEF += 1;
+    }
     if ex.contains_state(state_array_index) {
         return;
+    }
+    unsafe {
+        R0_AFT += 1;
     }
     ex[state_array_index] = Default::default();
 
@@ -348,8 +361,14 @@ fn memoization_calculate_split_expectation_aux1<
 ) {
     let state_array_index = DoubleCardCountIndex::new(current_hand0, *hand_state0, current_hand1);
 
+    unsafe {
+        R1_BEF += 1;
+    }
     if ex.contains_state(state_array_index) {
         return;
+    }
+    unsafe {
+        R1_AFT += 1;
     }
     ex[state_array_index] = Default::default();
 
@@ -517,7 +536,13 @@ fn memoization_calculate_split_expectation_aux2<
     let state_array_index = DoubleCardCountIndex::new(current_hand0, *hand_state0, current_hand1);
 
     let mut dealer_extra_hand = CardCount::with_number_of_decks(0);
+    unsafe {
+        R2_BEF += 1;
+    }
     if !dealer_hand_ps.contains_state(current_shoe) {
+        unsafe {
+            R2_AFT += 1;
+        }
         dealer_hand_ps[current_shoe] = Default::default();
         memoization_dealer_get_cards::<
             DealerHandValueProbability,
