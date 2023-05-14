@@ -66,7 +66,6 @@ pub struct PlayerPlay<'a> {
     card_counts_aux: Vec<CardCount>,
 
     solution_single_aux: [SingleStateArray<ExpectationAll>; 10],
-    solution_double_aux: [DoubleStateArray<ExpectationAll>; 10],
 }
 
 impl<'a> PlayerPlay<'a> {
@@ -80,14 +79,12 @@ impl<'a> PlayerPlay<'a> {
             card_counts_aux: Vec::new(),
 
             solution_single_aux: Default::default(),
-            solution_double_aux: Default::default(),
         }
     }
 
     pub fn solve<'b>(&'b mut self, shoe: &CardCount) {
         for i in 0..10 {
             self.solution_single_aux[i].clear();
-            self.solution_double_aux[i].clear();
         }
         let mut shoe = shoe.clone();
 
@@ -108,18 +105,8 @@ impl<'a> PlayerPlay<'a> {
         &self.solution_single_aux[(dealer_up_card - 1) as usize][hand]
     }
 
-    pub fn get_expectation_with_double(
-        &mut self,
-        hand0: &CardCount,
-        hand_state0: HandState,
-        hand1: &CardCount,
-        dealer_up_card: u8,
-    ) -> &ExpectationAll {
-        let state_array_index = DoubleCardCountIndex::new(hand0, hand_state0, hand1);
-        &self.solution_double_aux[(dealer_up_card - 1) as usize][state_array_index]
-    }
-
     fn get_valid_shoes_after_stand(&mut self, shoe: &mut CardCount) {
+        // TODO: Consider double hands
         let charlie_number = self.rule.charlie_number as u16;
         self.card_counts_aux.clear();
         Self::get_valid_shoes_after_stand_aux(
