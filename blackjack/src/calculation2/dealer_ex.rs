@@ -70,7 +70,7 @@ impl Default for MutPointer {
 type MemoizationFunctionType =
     fn(&Rule, &CardCount, &mut CardCount, &mut SingleStateArray<DealerHandValueProbability>);
 
-struct DealerPlay<'a> {
+pub struct DealerPlay<'a> {
     rule: &'a Rule,
     number_of_threads: usize,
     memoization_functions: [MemoizationFunctionType; 10],
@@ -145,15 +145,15 @@ impl<'a> DealerPlay<'a> {
         self.dealer_odd_already_calculated.clear();
     }
 
-    pub fn update_dealer_odds(&mut self, dealer_plus_shoes: &[&CardCount]) {
+    pub fn update_dealer_odds(&mut self, dealer_plus_shoes: &[CardCount]) {
         for dealer_plus_shoe in dealer_plus_shoes {
             if self
                 .dealer_odd_already_calculated
-                .contains_state(*dealer_plus_shoe)
+                .contains_state(dealer_plus_shoe)
             {
                 continue;
             }
-            self.dealer_odd_already_calculated[*dealer_plus_shoe] = ();
+            self.dealer_odd_already_calculated[dealer_plus_shoe] = ();
 
             // Allocate a new odd from memory pool.
             let odd = &mut self.dealer_odds_memory_pool[self.dealer_odds_memory_pool_index];
@@ -163,13 +163,13 @@ impl<'a> DealerPlay<'a> {
 
             Self::update_dealer_odd(
                 self.rule,
-                *dealer_plus_shoe,
+                dealer_plus_shoe,
                 &self.memoization_functions,
                 &mut self.dealer_hands_aux[0],
                 odd,
             );
 
-            self.dealer_odds[*dealer_plus_shoe] =
+            self.dealer_odds[dealer_plus_shoe] =
                 MutPointer::new(odd as *mut SingleStateArray<DealerHandValueProbability>);
         }
         // TODO: Use multithreads
