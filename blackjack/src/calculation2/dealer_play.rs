@@ -48,6 +48,25 @@ impl DealerHandValueProbability {
     }
 }
 
+#[derive(Clone)]
+struct MutPointer {
+    ptr: *mut SingleStateArray<DealerHandValueProbability>,
+}
+
+impl MutPointer {
+    fn new(ptr: *mut SingleStateArray<DealerHandValueProbability>) -> Self {
+        Self { ptr }
+    }
+}
+
+impl Default for MutPointer {
+    fn default() -> Self {
+        Self {
+            ptr: std::ptr::null_mut(),
+        }
+    }
+}
+
 type MemoizationFunctionType =
     fn(&Rule, &CardCount, &mut CardCount, &mut SingleStateArray<DealerHandValueProbability>);
 
@@ -56,12 +75,18 @@ struct DealerPlay<'a> {
     number_of_threads: usize,
     memoization_functions: [MemoizationFunctionType; 10],
 
-    dealer_odds: SingleStateArray<SingleStateArray<DealerHandValueProbability>>,
+    dealer_odds: SingleStateArray<MutPointer>,
+    dealer_odds_memory_pool: Vec<SingleStateArray<DealerHandValueProbability>>,
+    dealer_odds_memory_pool_index: usize,
+    dealer_odd_already_calculated: SingleStateArray<()>,
 
     dealer_hands_aux: Vec<CardCount>,
+    dealer_hands_with_up_cards: Vec<CardCount>,
 }
 
 impl<'a> DealerPlay<'a> {
+    const MEMORY_POOL_SIZE: usize = 10000;
+
     pub fn new(rule: &'a Rule, number_of_threads: usize) -> Self {
         let memoization_function_for_ace = match rule.peek_policy {
             PeekPolicy::UpAce | PeekPolicy::UpAceOrTen => Self::memoization_dealer_gets_cards::<10>,
@@ -71,6 +96,14 @@ impl<'a> DealerPlay<'a> {
             PeekPolicy::UpAceOrTen => Self::memoization_dealer_gets_cards::<1>,
             _ => Self::memoization_dealer_gets_cards::<0>,
         };
+
+        let mut dealer_hands_with_up_cards = Vec::with_capacity(10);
+        for dealer_up_card in 1..=10 {
+            let mut dealer_hand = CardCount::with_number_of_decks(0);
+            dealer_hand.add_card(dealer_up_card);
+            dealer_hands_with_up_cards.push(dealer_hand);
+        }
+
         Self {
             rule,
             number_of_threads,
@@ -88,20 +121,56 @@ impl<'a> DealerPlay<'a> {
             ],
 
             dealer_odds: Default::default(),
+            dealer_odds_memory_pool: Vec::with_capacity(10000),
+            dealer_odds_memory_pool_index: 0,
+            dealer_odd_already_calculated: Default::default(),
 
             dealer_hands_aux: vec![CardCount::with_number_of_decks(0); 10],
+            dealer_hands_with_up_cards,
         }
+    }
+
+    pub fn get_dealer_hand_value_probability(
+        &self,
+        dealer_plus_shoe: &CardCount,
+        dealer_up_card: u8,
+    ) -> &DealerHandValueProbability {
+        let odd = self.dealer_odds[dealer_plus_shoe].ptr;
+        let odd = unsafe { &*odd };
+        &odd[&self.dealer_hands_with_up_cards[(dealer_up_card - 1) as usize]]
+    }
+
+    pub fn clear_dealer_odds(&mut self) {
+        self.dealer_odds.clear();
+        self.dealer_odd_already_calculated.clear();
     }
 
     pub fn update_dealer_odds(&mut self, dealer_plus_shoes: &[&CardCount]) {
         for dealer_plus_shoe in dealer_plus_shoes {
+            if self
+                .dealer_odd_already_calculated
+                .contains_state(*dealer_plus_shoe)
+            {
+                continue;
+            }
+            self.dealer_odd_already_calculated[*dealer_plus_shoe] = ();
+
+            // Allocate a new odd from memory pool.
+            let odd = &mut self.dealer_odds_memory_pool[self.dealer_odds_memory_pool_index];
+            odd.clear();
+            self.dealer_odds_memory_pool_index =
+                (self.dealer_odds_memory_pool_index + 1) % Self::MEMORY_POOL_SIZE;
+
             Self::update_dealer_odd(
                 self.rule,
                 *dealer_plus_shoe,
                 &self.memoization_functions,
                 &mut self.dealer_hands_aux[0],
-                &mut self.dealer_odds[*dealer_plus_shoe],
+                odd,
             );
+
+            self.dealer_odds[*dealer_plus_shoe] =
+                MutPointer::new(odd as *mut SingleStateArray<DealerHandValueProbability>);
         }
         // TODO: Use multithreads
     }
@@ -119,6 +188,9 @@ impl<'a> DealerPlay<'a> {
         odd: &mut SingleStateArray<DealerHandValueProbability>,
     ) {
         for dealer_up_card in 1..=10 {
+            if dealer_plus_shoe[dealer_up_card] == 0 {
+                continue;
+            }
             dealer_hand.add_card(dealer_up_card);
 
             let memoization_function = memoization_functions[(dealer_up_card - 1) as usize];

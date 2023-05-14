@@ -33,6 +33,16 @@ impl<T: Default> SingleStateArray<T> {
         }
     }
 
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            data: HashMap::with_capacity(capacity),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.data.clear();
+    }
+
     pub fn contains_state(&self, index: &CardCount) -> bool {
         self.data.contains_key(&index.hash_value)
     }
@@ -71,6 +81,16 @@ impl<T: Default> DoubleStateArray<T> {
         DoubleStateArray {
             data: HashMap::new(),
         }
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            data: HashMap::with_capacity(capacity),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.data.clear();
     }
 
     pub fn contains_state(&self, index: DoubleCardCountIndex) -> bool {
